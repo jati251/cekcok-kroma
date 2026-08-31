@@ -1,27 +1,16 @@
-import { useState, useRef, useEffect } from "react";
+import { useRef, useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { useEditorStore, DragItem, formatTimecode } from "../../stores/useEditorStore";
 import { TimeRuler } from "./TimeRuler";
-
-interface Track {
-  id: string;
-  name: string;
-  items: DragItem[];
-}
 
 export function Timeline() {
   const { 
     draggedItem, activeTool, 
     playheadPosition, setPlayheadPosition, 
     zoomLevel, setZoomLevel,
-    selectedClipId, setSelectedClipId 
+    selectedClipId, setSelectedClipId,
+    tracks, setTracks
   } = useEditorStore();
-  
-  const [tracks, setTracks] = useState<Track[]>([
-    { id: "v1", name: "V1", items: [] },
-    { id: "v2", name: "V2", items: [] },
-    { id: "a1", name: "A1", items: [] },
-  ]);
   
   const timelineRef = useRef<HTMLDivElement>(null);
   const [timelineWidth, setTimelineWidth] = useState(1000);
@@ -44,11 +33,9 @@ export function Timeline() {
       setTracks((prev) =>
         prev.map((track) => {
           if (track.id === trackId) {
-            // Drop at the end of the track or at playhead if we want to be fancy
-            // For now, drop at the end
             const lastItem = track.items[track.items.length - 1];
             const start = lastItem ? (lastItem.start || 0) + (lastItem.duration || 0) : 0;
-            const duration = draggedItem.duration || 5; // default 5s if unknown
+            const duration = draggedItem.duration || 5; 
             
             return {
               ...track,
@@ -75,13 +62,11 @@ export function Timeline() {
             const newItems = [...track.items];
             const target = newItems[itemIdx];
             
-            // Try to split at playhead position, if playhead is inside clip
             let splitPos = playheadPosition;
             const start = target.start || 0;
             const dur = target.duration || 0;
             
             if (splitPos <= start || splitPos >= start + dur) {
-               // Fallback: split in the middle of the clip if playhead is elsewhere
                splitPos = start + (dur / 2);
             }
             
@@ -103,10 +88,19 @@ export function Timeline() {
   const handleTimelineClick = (e: React.MouseEvent) => {
     if (timelineRef.current) {
       const rect = timelineRef.current.getBoundingClientRect();
-      const x = e.clientX - rect.left - 64; // adjust for track header
+      const x = e.clientX - rect.left - 64; 
       if (x >= 0) {
         setPlayheadPosition(x / zoomLevel);
       }
+    }
+  };
+
+  // Determine global cursor based on active tool
+  const getTimelineCursorClass = () => {
+    switch (activeTool) {
+      case "razor": return "cursor-crosshair";
+      case "hand": return "cursor-grab active:cursor-grabbing";
+      default: return "cursor-default";
     }
   };
 
@@ -130,7 +124,7 @@ export function Timeline() {
         </div>
       </div>
       <div 
-        className="flex-1 relative overflow-x-auto overflow-y-hidden flex flex-col bg-background/50"
+        className={`flex-1 relative overflow-x-auto overflow-y-hidden flex flex-col bg-background/50 ${getTimelineCursorClass()}`}
         ref={timelineRef}
       >
         <div className="min-w-max relative flex-1 flex flex-col" style={{ width: Math.max(timelineWidth + 64, 3000) }}>
@@ -159,7 +153,7 @@ export function Timeline() {
           </div>
           
           {/* Tracks Area */}
-          <div className="flex-1 space-y-1 relative pt-2 pb-8">
+          <div className="flex-1 space-y-1 relative pt-2 pb-8" onClick={() => setSelectedClipId(null)}>
             {/* Playhead Line */}
             <div 
               className="absolute top-0 bottom-0 w-px bg-accent z-20 pointer-events-none"
@@ -203,7 +197,7 @@ export function Timeline() {
                       onClick={(e) => handleClipClick(e, track.id, idx, item)}
                       className={`absolute h-[80%] top-[10%] rounded flex items-center px-2 text-xs shadow-sm border ${
                         selectedClipId === item.id ? "border-white" : "border-black/40"
-                      } ${activeTool === "razor" ? "cursor-crosshair hover:bg-red-500/80" : "cursor-ew-resize hover:brightness-110"}`}
+                      } ${activeTool === "razor" ? "cursor-crosshair hover:bg-red-500/80" : "cursor-pointer hover:brightness-110"}`}
                       style={{
                         left: (item.start || 0) * zoomLevel,
                         width: (item.duration || 0) * zoomLevel,
@@ -228,7 +222,3 @@ export function Timeline() {
     </div>
   );
 }
-
-// Needed to share tracks state to ProgramMonitor
-// In a real app, tracks would be in the EditorStore.
-// For now, let's keep it here, but ideally we should move it.

@@ -10,6 +10,12 @@ export interface DragItem {
   src?: string; // real file path
 }
 
+export interface Track {
+  id: string;
+  name: string;
+  items: DragItem[];
+}
+
 export type Tool = "selection" | "razor" | "hand";
 
 interface EditorStore {
@@ -27,16 +33,25 @@ interface EditorStore {
   zoomLevel: number; // pixels per second
   setZoomLevel: (zoom: number) => void;
 
-  // Selection state
+  // Selection & Delete
   selectedClipId: string | null;
   setSelectedClipId: (id: string | null) => void;
+  deleteSelectedClip: () => void;
+  
+  // Playback
+  isPlaying: boolean;
+  setIsPlaying: (playing: boolean) => void;
+
+  // Tracks State
+  tracks: Track[];
+  setTracks: (updater: (prev: Track[]) => Track[]) => void;
   
   // Media Bin State
   mediaItems: DragItem[];
   addMediaItem: (item: DragItem) => void;
 }
 
-export const useEditorStore = create<EditorStore>((set) => ({
+export const useEditorStore = create<EditorStore>((set, get) => ({
   draggedItem: null,
   setDraggedItem: (item) => set({ draggedItem: item }),
   
@@ -45,11 +60,34 @@ export const useEditorStore = create<EditorStore>((set) => ({
 
   playheadPosition: 0,
   setPlayheadPosition: (pos) => set({ playheadPosition: pos }),
+  
   zoomLevel: 100, // 100px = 1 second
-  setZoomLevel: (zoom) => set({ zoomLevel: zoom }),
+  setZoomLevel: (zoom) => set({ zoomLevel: Math.min(300, Math.max(10, zoom)) }),
 
   selectedClipId: null,
   setSelectedClipId: (id) => set({ selectedClipId: id }),
+  
+  deleteSelectedClip: () => {
+    const state = get();
+    if (!state.selectedClipId) return;
+    state.setTracks((prev) => 
+      prev.map(t => ({
+        ...t,
+        items: t.items.filter(item => item.id !== state.selectedClipId)
+      }))
+    );
+    set({ selectedClipId: null });
+  },
+
+  isPlaying: false,
+  setIsPlaying: (playing) => set({ isPlaying: playing }),
+
+  tracks: [
+    { id: "v1", name: "V1", items: [] },
+    { id: "v2", name: "V2", items: [] },
+    { id: "a1", name: "A1", items: [] },
+  ],
+  setTracks: (updater) => set((state) => ({ tracks: updater(state.tracks) })),
   
   mediaItems: [],
   addMediaItem: (item) => set((state) => ({ mediaItems: [...state.mediaItems, item] })),
