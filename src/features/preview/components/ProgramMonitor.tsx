@@ -10,21 +10,15 @@ import { TransportBar } from "./TransportBar";
 
 export function ProgramMonitor() {
   const {
-    videoRef,
-    videoRefA,
-    videoRefB,
-    srcA,
-    srcB,
-    activeSlot,
+    canvasRef,
     hasMedia,
-    isAudible,
-    effectiveVolume,
     totalDuration,
     meterL,
     meterR,
     playheadPosition,
     isPlaying,
     setIsPlaying,
+    resumeAudio,
   } = useVideoPlayback();
 
   const masterVolume = useEditorStore((state) => state.masterVolume);
@@ -38,21 +32,20 @@ export function ProgramMonitor() {
   const [isLooping, setIsLooping] = useState(false);
   const [snapshotFlash, setSnapshotFlash] = useState(false);
 
+  const handleTogglePlay = () => {
+    resumeAudio(); // Ensure Web Audio API is un-suspended on explicit user interaction
+    setIsPlaying(!isPlaying);
+  };
+
   const handleExportFrame = () => {
-    if (!videoRef.current) return;
+    if (!canvasRef.current) return;
     try {
-      const canvas = document.createElement("canvas");
-      canvas.width = videoRef.current.videoWidth || 1920;
-      canvas.height = videoRef.current.videoHeight || 1080;
-      const ctx = canvas.getContext("2d");
-      if (ctx) {
-        ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
-        const dataUrl = canvas.toDataURL("image/png");
-        const a = document.createElement("a");
-        a.href = dataUrl;
-        a.download = `frame_${formatTimecode(playheadPosition).replace(/:/g, "-")}.png`;
-        a.click();
-      }
+      const dataUrl = canvasRef.current.toDataURL("image/png");
+      const a = document.createElement("a");
+      a.href = dataUrl;
+      a.download = `frame_${formatTimecode(playheadPosition).replace(/:/g, "-")}.png`;
+      a.click();
+      
       setSnapshotFlash(true);
       setTimeout(() => setSnapshotFlash(false), 200);
     } catch (e) {
@@ -73,26 +66,19 @@ export function ProgramMonitor() {
 
       <div className="flex-1 p-2 flex gap-2 relative bg-[#111] overflow-hidden">
         <VideoCanvas
-          videoRefA={videoRefA}
-          videoRefB={videoRefB}
-          srcA={srcA}
-          srcB={srcB}
-          activeSlot={activeSlot}
+          canvasRef={canvasRef}
           hasMedia={hasMedia}
-          isAudible={isAudible}
-          effectiveVolume={effectiveVolume}
           showSafeMargins={showSafeMargins}
           snapshotFlash={snapshotFlash}
           zoomMode={zoomMode}
           resolution={resolution}
-          onEnded={() => setIsPlaying(false)}
         />
         <AudioVuMeter meterL={meterL} meterR={meterR} />
       </div>
 
       <TransportBar
         isPlaying={isPlaying}
-        onTogglePlay={() => setIsPlaying(!isPlaying)}
+        onTogglePlay={handleTogglePlay}
         showSafeMargins={showSafeMargins}
         onToggleSafeMargins={() => setShowSafeMargins(!showSafeMargins)}
         isLooping={isLooping}

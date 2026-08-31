@@ -1,15 +1,15 @@
 import { useEditorStore } from "../../../stores/useEditorStore";
-import { importMediaFile } from "../api/importMedia";
+import { importMediaFiles } from "../api/importMedia";
 import { MediaItemCard } from "./MediaItemCard";
 
 export function MediaBin() {
   const mediaItems = useEditorStore(state => state.mediaItems);
-  const addMediaItem = useEditorStore(state => state.addMediaItem);
+  const addMediaItems = useEditorStore(state => state.addMediaItems);
 
   const handleImportClick = async () => {
-    const newMedia = await importMediaFile();
-    if (newMedia) {
-      addMediaItem(newMedia);
+    const newMediaList = await importMediaFiles();
+    if (newMediaList.length > 0) {
+      addMediaItems(newMediaList);
     }
   };
 

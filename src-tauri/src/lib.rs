@@ -126,6 +126,7 @@ pub fn run() {
             commands::load_project,
             commands::get_state,
             commands::add_media_to_bin,
+            commands::add_media_batch_to_bin,
             commands::drop_clip_to_timeline,
             commands::delete_clip,
             commands::undo_action_cmd,

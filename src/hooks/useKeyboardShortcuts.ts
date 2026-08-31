@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { useEditorStore } from "../stores/useEditorStore";
 import { listen } from "@tauri-apps/api/event";
-import { importMediaFile } from "../features/media-bin";
+import { importMediaFiles } from "../features/media-bin";
 
 /**
  * Global Keyboard Shortcut & Native OS Menu Action Hook
@@ -14,7 +14,7 @@ export function useKeyboardShortcuts() {
   const setZoomLevel = useEditorStore((state) => state.setZoomLevel);
   const setInPoint = useEditorStore((state) => state.setInPoint);
   const setOutPoint = useEditorStore((state) => state.setOutPoint);
-  const addMediaItem = useEditorStore((state) => state.addMediaItem);
+  const addMediaItems = useEditorStore((state) => state.addMediaItems);
 
   // Native OS Application Menu Event Listener (macOS titlebar / Windows menu bar)
   useEffect(() => {
@@ -24,8 +24,8 @@ export function useKeyboardShortcuts() {
 
       switch (action) {
         case "import_media": {
-          const media = await importMediaFile();
-          if (media) addMediaItem(media);
+          const mediaList = await importMediaFiles();
+          if (mediaList.length > 0) addMediaItems(mediaList);
           break;
         }
         case "delete_clip":
@@ -54,7 +54,7 @@ export function useKeyboardShortcuts() {
     return () => {
       unlistenPromise.then((unlisten) => unlisten());
     };
-  }, [deleteSelectedClip, setIsPlaying, setActiveTool, setInPoint, setOutPoint, addMediaItem]);
+  }, [deleteSelectedClip, setIsPlaying, setActiveTool, setInPoint, setOutPoint, addMediaItems]);
 
   // Global Keyboard Shortcuts
   useEffect(() => {

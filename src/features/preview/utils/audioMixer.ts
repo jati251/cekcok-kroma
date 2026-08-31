@@ -1,19 +1,39 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { Track } from "../../../types/editor";
+import { PlaybackSegment } from "../hooks/useVideoPlayback";
 
 interface ActiveAudioVoice {
-  trackId: string;
-  clipId: string;
+  id: string; // segment id
   src: string;
   audio: HTMLAudioElement;
+  sourceNode: MediaElementAudioSourceNode | null;
+  gainNode: GainNode | null;
   isReady: boolean;
-  targetStartOffset: number;
 }
 
 export class MultiTrackAudioMixer {
-  private voices: Map<string, ActiveAudioVoice> = new Map(); // key: trackId
+  private voices: Map<string, ActiveAudioVoice> = new Map(); // key: segment id
+  private audioCtx: AudioContext | null = null;
+  private masterGain: GainNode | null = null;
   private masterVolume: number = 1;
   private isMuted: boolean = false;
+  private activeSegments: Set<string> = new Set();
+  
+  // Track context state to handle resume
+  public ensureContext() {
+    if (!this.audioCtx) {
+      try {
+        this.audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+        this.masterGain = this.audioCtx.createGain();
+        this.masterGain.connect(this.audioCtx.destination);
+        this.updateVolumes();
+      } catch (e) {
+        console.warn("AudioContext initialization fallback:", e);
+      }
+    }
+    if (this.audioCtx && this.audioCtx.state === "suspended") {
+      this.audioCtx.resume().catch(() => {});
+    }
+  }
 
   public setMasterVolume(vol: number) {
     this.masterVolume = Math.max(0, Math.min(1, vol));
@@ -26,121 +46,131 @@ export class MultiTrackAudioMixer {
   }
 
   private updateVolumes() {
-    const effectiveVol = this.isMuted ? 0 : this.masterVolume;
-    this.voices.forEach((voice) => {
-      voice.audio.volume = effectiveVol;
-      voice.audio.muted = this.isMuted;
-    });
+    if (this.masterGain && this.audioCtx) {
+      this.masterGain.gain.setValueAtTime(
+        this.isMuted ? 0 : this.masterVolume,
+        this.audioCtx.currentTime
+      );
+    }
   }
 
-  /**
-   * Sync all audio tracks to the current playhead position.
-   * Plays multiple overlapping audio tracks concurrently (A1, A2, etc.).
-   */
-  public sync(playheadPosition: number, tracks: Track[], isPlaying: boolean) {
-    const audioTracks = tracks.filter((t) => t.type === "audio" && !t.isMuted);
-    const activeTrackIds = new Set<string>();
+  public sync(
+    playheadPosition: number,
+    audioSegments: PlaybackSegment[],
+    isPlaying: boolean,
+    forceSeek: boolean = false
+  ) {
+    this.ensureContext();
+    this.activeSegments.clear();
 
-    for (const track of audioTracks) {
-      // Find clip active at current playhead
-      const activeClip = track.items.find(
-        (item) =>
-          item.src &&
-          playheadPosition >= (item.start || 0) &&
-          playheadPosition < (item.start || 0) + (item.duration || 0)
-      );
+    for (const seg of audioSegments) {
+      if (playheadPosition >= seg.timelineStart && playheadPosition < seg.timelineEnd) {
+        this.activeSegments.add(seg.id);
 
-      if (!activeClip || !activeClip.src) {
-        // No active clip on this track: clean up voice
-        const existing = this.voices.get(track.id);
-        if (existing) {
-          existing.audio.pause();
-          existing.audio.src = "";
-          this.voices.delete(track.id);
-        }
-        continue;
-      }
+        let voice = this.voices.get(seg.id);
+        const expectedMediaTime = Math.max(0, seg.trimIn + (playheadPosition - seg.timelineStart));
 
-      activeTrackIds.add(track.id);
-      const expectedMediaTime = Math.max(
-        0,
-        (activeClip.trimIn || 0) + (playheadPosition - (activeClip.start || 0))
-      );
-
-      let voice = this.voices.get(track.id);
-
-      // New voice or changed clip
-      if (!voice || voice.clipId !== activeClip.id) {
-        if (voice) {
-          voice.audio.pause();
-          voice.audio.src = "";
-        }
-
-        const audio = new Audio();
-        audio.src = convertFileSrc(activeClip.src);
-        audio.preload = "auto";
-        audio.volume = this.isMuted ? 0 : this.masterVolume;
-        audio.muted = this.isMuted;
-
-        const newVoice: ActiveAudioVoice = {
-          trackId: track.id,
-          clipId: activeClip.id,
-          src: activeClip.src,
-          audio,
-          isReady: false,
-          targetStartOffset: expectedMediaTime,
-        };
-
-        const onReady = () => {
-          newVoice.isReady = true;
-          try {
-            audio.currentTime = expectedMediaTime;
-          } catch {}
-          if (isPlaying) {
-            audio.play().catch(() => {});
-          }
-        };
-
-        if (audio.readyState >= 1) {
-          onReady();
-        } else {
-          audio.addEventListener("loadedmetadata", onReady, { once: true });
-        }
-
-        this.voices.set(track.id, newVoice);
-      } else {
-        // Voice exists: manage playback state
-        if (isPlaying) {
-          if (voice.isReady && voice.audio.paused) {
-            voice.audio.play().catch(() => {});
-          }
-          // Only perform drift correction if significant drift (> 250ms) and audio is playing smoothly
-          if (voice.isReady && voice.audio.readyState >= 2) {
-            const drift = Math.abs(voice.audio.currentTime - expectedMediaTime);
-            if (drift > 0.25) {
-              voice.audio.currentTime = expectedMediaTime;
+        if (!voice) {
+          const audio = new Audio();
+          audio.src = convertFileSrc(seg.src);
+          audio.preload = "auto";
+          audio.crossOrigin = "anonymous";
+          
+          let sourceNode: MediaElementAudioSourceNode | null = null;
+          let gainNode: GainNode | null = null;
+          
+          if (this.audioCtx && this.masterGain) {
+            try {
+              sourceNode = this.audioCtx.createMediaElementSource(audio);
+              gainNode = this.audioCtx.createGain();
+              sourceNode.connect(gainNode);
+              gainNode.connect(this.masterGain);
+            } catch (e) {
+              console.warn("WebAudio node connection failed:", e);
             }
           }
-        } else {
-          // Paused: pause audio and seek to exact frame
-          if (!voice.audio.paused) {
-            voice.audio.pause();
+
+          voice = {
+            id: seg.id,
+            src: seg.src,
+            audio,
+            sourceNode,
+            gainNode,
+            isReady: false,
+          };
+
+          const onReady = () => {
+            if (!voice) return;
+            voice.isReady = true;
+            try {
+              voice.audio.currentTime = expectedMediaTime;
+            } catch {}
+            if (isPlaying) {
+              voice.audio.play().catch(() => {});
+            }
+          };
+
+          if (audio.readyState >= 1) {
+            onReady();
+          } else {
+            audio.addEventListener("loadedmetadata", onReady, { once: true });
           }
-          if (voice.isReady && Math.abs(voice.audio.currentTime - expectedMediaTime) > 0.04) {
-            voice.audio.currentTime = expectedMediaTime;
+
+          this.voices.set(seg.id, voice);
+        } else {
+          // Voice exists in pool
+          if (isPlaying) {
+            if (forceSeek && voice.isReady) {
+              try {
+                voice.audio.currentTime = expectedMediaTime;
+              } catch {}
+            }
+            if (voice.isReady && voice.audio.paused) {
+              try {
+                if (Math.abs(voice.audio.currentTime - expectedMediaTime) > 0.08) {
+                  voice.audio.currentTime = expectedMediaTime;
+                }
+              } catch {}
+              voice.audio.play().catch(() => {});
+            }
+          } else {
+            // Paused state
+            if (!voice.audio.paused) {
+              voice.audio.pause();
+            }
+            if (forceSeek && voice.isReady) {
+              try {
+                voice.audio.currentTime = expectedMediaTime;
+              } catch {}
+            }
           }
         }
       }
     }
 
-    // Clean up voices for tracks that are no longer active
-    this.voices.forEach((voice, trackId) => {
-      if (!activeTrackIds.has(trackId)) {
-        voice.audio.pause();
-        voice.audio.src = "";
-        this.voices.delete(trackId);
+    // Handle inactive segments: Pause them, but retain them in pool for fast rewind/looping
+    for (const [id, voice] of this.voices.entries()) {
+      if (!this.activeSegments.has(id)) {
+        if (!voice.audio.paused) {
+          voice.audio.pause();
+        }
       }
-    });
+    }
+
+    // LRU Voice cleanup (keep up to 16 voices cached)
+    if (this.voices.size > 16) {
+      for (const [id, voice] of this.voices.entries()) {
+        if (!this.activeSegments.has(id)) {
+          voice.audio.pause();
+          voice.audio.removeAttribute("src");
+          voice.audio.load();
+          if (voice.gainNode) voice.gainNode.disconnect();
+          if (voice.sourceNode) voice.sourceNode.disconnect();
+          this.voices.delete(id);
+          if (this.voices.size <= 16) break;
+        }
+      }
+    }
   }
 
   public pauseAll() {
@@ -152,8 +182,9 @@ export class MultiTrackAudioMixer {
   }
 
   public playAll() {
+    this.ensureContext();
     this.voices.forEach((voice) => {
-      if (voice.audio.paused) {
+      if (voice.audio.paused && voice.isReady && this.activeSegments.has(voice.id)) {
         voice.audio.play().catch(() => {});
       }
     });
@@ -162,12 +193,16 @@ export class MultiTrackAudioMixer {
   public stopAll() {
     this.voices.forEach((voice) => {
       voice.audio.pause();
-      voice.audio.src = "";
+      voice.audio.removeAttribute("src");
+      voice.audio.load();
+      if (voice.gainNode) voice.gainNode.disconnect();
+      if (voice.sourceNode) voice.sourceNode.disconnect();
     });
     this.voices.clear();
+    this.activeSegments.clear();
   }
 
   public getActiveVoiceCount(): number {
-    return this.voices.size;
+    return this.activeSegments.size;
   }
 }

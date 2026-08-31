@@ -9,10 +9,10 @@ interface RustVideoMetadata {
   has_audio: boolean;
 }
 
-export async function importMediaFile(): Promise<DragItem | null> {
+export async function importMediaFiles(): Promise<DragItem[]> {
   try {
     const selected = await open({
-      multiple: false,
+      multiple: true,
       filters: [
         {
           name: "Video",
@@ -21,62 +21,77 @@ export async function importMediaFile(): Promise<DragItem | null> {
       ],
     });
 
-    if (typeof selected !== "string") {
-      return null;
+    if (!selected) {
+      return [];
     }
 
-    let duration = 10;
-    let width = 1920;
-    let height = 1080;
-    let hasAudio = true;
-    let waveform: number[] = [];
+    const paths: string[] = Array.isArray(selected) ? selected : [selected];
+    if (paths.length === 0) return [];
 
-    // Call Rust backend for metadata
-    try {
-      const metadata = await invoke<RustVideoMetadata>("get_video_metadata", {
-        path: selected,
-      });
-      if (metadata) {
-        duration = metadata.duration || 10;
-        width = metadata.width || 1920;
-        height = metadata.height || 1080;
-        hasAudio = metadata.has_audio;
-      }
-    } catch (error) {
-      console.warn("FFprobe metadata fallback:", error);
-    }
+    const items = await Promise.all(
+      paths.map(async (filePath, index) => {
+        let duration = 10;
+        let width = 1920;
+        let height = 1080;
+        let hasAudio = true;
+        let waveform: number[] = [];
 
-    // Call Rust backend to extract audio waveform peaks
-    if (hasAudio) {
-      try {
-        const wf = await invoke<number[]>("get_audio_waveform", {
-          path: selected,
-          points: 120,
-        });
-        if (wf && wf.length > 0) {
-          waveform = wf;
+        // Call Rust backend for metadata
+        try {
+          const metadata = await invoke<RustVideoMetadata>("get_video_metadata", {
+            path: filePath,
+          });
+          if (metadata) {
+            duration = metadata.duration || 10;
+            width = metadata.width || 1920;
+            height = metadata.height || 1080;
+            hasAudio = metadata.has_audio;
+          }
+        } catch (error) {
+          console.warn("FFprobe metadata fallback:", error);
         }
-      } catch (err) {
-        console.warn("Waveform extraction fallback:", err);
-      }
-    }
 
-    const fileName = selected.split("/").pop() || selected.split("\\").pop() || "Video";
+        // Call Rust backend to extract audio waveform peaks
+        if (hasAudio) {
+          try {
+            const wf = await invoke<number[]>("get_audio_waveform", {
+              path: filePath,
+              points: 120,
+            });
+            if (wf && wf.length > 0) {
+              waveform = wf;
+            }
+          } catch (err) {
+            console.warn("Waveform extraction fallback:", err);
+          }
+        }
 
-    return {
-      id: `media-${Date.now()}`,
-      type: "media",
-      name: fileName,
-      color: "#2d8ceb",
-      src: selected,
-      duration,
-      width,
-      height,
-      hasAudio,
-      waveform,
-    };
+        const fileName = filePath.split("/").pop() || filePath.split("\\").pop() || "Video";
+
+        return {
+          id: `media-${Date.now()}-${index}`,
+          type: "media" as const,
+          name: fileName,
+          color: "#2d8ceb",
+          src: filePath,
+          duration,
+          width,
+          height,
+          hasAudio,
+          waveform,
+        };
+      })
+    );
+
+    return items;
   } catch (err) {
-    console.error("Failed to import media file:", err);
-    return null;
+    console.error("Failed to import media files:", err);
+    return [];
   }
+}
+
+// Backward-compatible alias
+export async function importMediaFile(): Promise<DragItem | null> {
+  const items = await importMediaFiles();
+  return items.length > 0 ? items[0] : null;
 }

@@ -196,6 +196,14 @@ pub fn add_media_to_bin(item: DragItem, state: State<'_, AppState>) -> Result<Do
 }
 
 #[tauri::command]
+pub fn add_media_batch_to_bin(items: Vec<DragItem>, state: State<'_, AppState>) -> Result<DocumentState, String> {
+    state.commit_history();
+    let mut doc = state.state.lock().map_err(|e| e.to_string())?;
+    doc.media_items.extend(items);
+    Ok(doc.clone())
+}
+
+#[tauri::command]
 pub fn drop_clip_to_timeline(
     track_id: String,
     video_clip: DragItem,
@@ -431,7 +439,7 @@ pub fn trim_clip_cmd(
 }
 
 #[tauri::command]
-pub fn get_playback_schedule(state: State<'_, AppState>) -> Result<Vec<crate::engine::playback::PlaybackSegment>, String> {
+pub fn get_playback_schedule(state: State<'_, AppState>) -> Result<crate::engine::playback::PlaybackSchedule, String> {
     let doc = state.state.lock().map_err(|e| e.to_string())?;
     Ok(crate::engine::playback::compile_playback_schedule(&doc.tracks))
 }

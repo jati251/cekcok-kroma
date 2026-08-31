@@ -16,6 +16,11 @@ export interface PlaybackSegment {
   height?: number;
 }
 
+export interface PlaybackSchedule {
+  videoSegments: PlaybackSegment[];
+  audioSegments: PlaybackSegment[];
+}
+
 export function useVideoPlayback() {
   const playheadPosition = useEditorStore((state) => state.playheadPosition);
   const setPlayheadPosition = useEditorStore((state) => state.setPlayheadPosition);
@@ -27,46 +32,35 @@ export function useVideoPlayback() {
   const masterVolume = useEditorStore((state) => state.masterVolume);
   const isMasterMuted = useEditorStore((state) => state.isMasterMuted);
 
-  // Dual-deck ping-pong video player references
-  const videoRefA = useRef<HTMLVideoElement>(null);
-  const videoRefB = useRef<HTMLVideoElement>(null);
-  const activeSlotRef = useRef<"A" | "B">("A");
-  const [activeSlot, setActiveSlot] = useState<"A" | "B">("A");
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  
+  // Hidden video elements map
+  const videoCacheRef = useRef<Map<string, HTMLVideoElement>>(new Map());
+  const frameCacheRef = useRef<Map<string, ImageBitmap>>(new Map());
 
-  const [srcA, setSrcA] = useState<string | null>(null);
-  const [srcB, setSrcB] = useState<string | null>(null);
-
-  // Track which segment ID is currently pre-seeked on the standby deck
-  const preSeekedSegmentIdRef = useRef<string | null>(null);
-
-  // Dedicated Multi-Track Audio Mixer (independent of video canvas)
   const audioMixerRef = useRef<MultiTrackAudioMixer>(new MultiTrackAudioMixer());
 
-  // Compiled schedule from Rust sequence compiler
-  const [schedule, setSchedule] = useState<PlaybackSegment[]>([]);
-  const scheduleRef = useRef<PlaybackSegment[]>([]);
+  const [schedule, setSchedule] = useState<PlaybackSchedule>({ videoSegments: [], audioSegments: [] });
+  const scheduleRef = useRef<PlaybackSchedule>({ videoSegments: [], audioSegments: [] });
   scheduleRef.current = schedule;
 
-  const playPromiseRef = useRef<Promise<void> | null>(null);
   const isPlayingRef = useRef<boolean>(false);
   isPlayingRef.current = isPlaying;
 
   const [meterL, setMeterL] = useState(-60);
   const [meterR, setMeterR] = useState(-60);
 
-  // Update audio mixer settings
   useEffect(() => {
     audioMixerRef.current.setMasterVolume(masterVolume);
     audioMixerRef.current.setMasterMute(isMasterMuted);
   }, [masterVolume, isMasterMuted]);
 
-  // Sync sequence schedule from Rust whenever tracks change
   useEffect(() => {
     let cancelled = false;
-    invoke<PlaybackSegment[]>("get_playback_schedule")
-      .then((segs) => {
+    invoke<PlaybackSchedule>("get_playback_schedule")
+      .then((sched) => {
         if (!cancelled) {
-          setSchedule(segs);
+          setSchedule(sched);
         }
       })
       .catch((err) => {
@@ -77,24 +71,17 @@ export function useVideoPlayback() {
     };
   }, [tracks]);
 
-  // Compute total sequence duration
   const totalDuration = useMemo(() => {
-    if (schedule.length > 0) {
-      return Math.max(schedule[schedule.length - 1].timelineEnd, 10);
-    }
     let max = 0;
-    tracks.forEach((t) => {
-      t.items.forEach((item) => {
-        const end = (item.start || 0) + (item.duration || 0);
-        if (end > max) max = end;
-      });
-    });
+    const vSegs = schedule.videoSegments;
+    const aSegs = schedule.audioSegments;
+    if (vSegs.length > 0) max = Math.max(max, vSegs[vSegs.length - 1].timelineEnd);
+    if (aSegs.length > 0) max = Math.max(max, aSegs[aSegs.length - 1].timelineEnd);
     return Math.max(max, 10);
-  }, [schedule, tracks]);
+  }, [schedule]);
 
-  // Helper to find segment at any timeline timestamp
   const getSegmentAt = useCallback((time: number): PlaybackSegment | null => {
-    const list = scheduleRef.current;
+    const list = scheduleRef.current.videoSegments;
     for (const seg of list) {
       if (time >= seg.timelineStart && time < seg.timelineEnd) {
         return seg;
@@ -103,9 +90,8 @@ export function useVideoPlayback() {
     return null;
   }, []);
 
-  // Helper to find next segment after current timestamp
   const getNextSegmentAfter = useCallback((time: number): PlaybackSegment | null => {
-    const list = scheduleRef.current;
+    const list = scheduleRef.current.videoSegments;
     for (const seg of list) {
       if (seg.timelineStart >= time - 0.01) {
         return seg;
@@ -114,286 +100,146 @@ export function useVideoPlayback() {
     return null;
   }, []);
 
-  const currentSegment = useMemo(() => getSegmentAt(playheadPosition), [getSegmentAt, playheadPosition, schedule]);
-
-  // PRE-LOAD & PRE-SEEK STANDBY DECK ONCE PER SEGMENT CHANGE (Zero-Stutter Cut Engine)
-  useEffect(() => {
-    const standbyEl = activeSlotRef.current === "A" ? videoRefB.current : videoRefA.current;
-
-    if (!currentSegment) {
-      const nextUpcoming = getNextSegmentAfter(playheadPosition);
-      if (nextUpcoming) {
-        const converted = convertFileSrc(nextUpcoming.src);
-        if (activeSlot === "A") {
-          setSrcA((prev) => (prev !== converted ? converted : prev));
-        } else {
-          setSrcB((prev) => (prev !== converted ? converted : prev));
-        }
-      }
-      return;
-    }
-
-    const currentSrcConverted = convertFileSrc(currentSegment.src);
-    const nextSeg = getNextSegmentAfter(currentSegment.timelineEnd);
-    const nextSrcConverted = nextSeg ? convertFileSrc(nextSeg.src) : null;
-
-    if (activeSlot === "A") {
-      setSrcA((prev) => (prev !== currentSrcConverted ? currentSrcConverted : prev));
-      if (nextSrcConverted) {
-        setSrcB((prev) => (prev !== nextSrcConverted ? nextSrcConverted : prev));
-      }
-    } else {
-      setSrcB((prev) => (prev !== currentSrcConverted ? currentSrcConverted : prev));
-      if (nextSrcConverted) {
-        setSrcA((prev) => (prev !== nextSrcConverted ? nextSrcConverted : prev));
-      }
-    }
-
-    // PRE-SEEK Standby Deck ONCE (prevent continuous seek reset)
-    if (nextSeg && nextSeg.id !== preSeekedSegmentIdRef.current && standbyEl) {
-      preSeekedSegmentIdRef.current = nextSeg.id;
-      const targetTime = nextSeg.trimIn;
-
-      const doSeek = () => {
-        try {
-          standbyEl.currentTime = targetTime;
-        } catch {}
-      };
-
-      if (standbyEl.readyState >= 1) {
-        doSeek();
-      } else {
-        standbyEl.addEventListener("loadedmetadata", doSeek, { once: true });
-      }
-    }
-  }, [currentSegment?.id, activeSlot, getNextSegmentAfter]);
-
-  // Canvas videos are kept permanently muted because MultiTrackAudioMixer handles all sound!
-  useEffect(() => {
-    if (videoRefA.current) {
-      videoRefA.current.muted = true;
-      videoRefA.current.volume = 0;
-    }
-    if (videoRefB.current) {
-      videoRefB.current.muted = true;
-      videoRefB.current.volume = 0;
-    }
-  }, []);
-
-  // PAUSED SCRUBBING / SEEKING: ONLY when NOT playing!
-  useEffect(() => {
-    if (isPlaying) return;
-
-    // Sync audio tracks when scrubbed while paused
-    audioMixerRef.current.sync(playheadPosition, tracks, false);
-
-    const activeEl = activeSlotRef.current === "A" ? videoRefA.current : videoRefB.current;
-    if (!activeEl || !currentSegment) return;
-
-    const targetMediaTime = Math.max(
-      0,
-      currentSegment.trimIn + (playheadPosition - currentSegment.timelineStart)
-    );
-
-    if (Math.abs(activeEl.currentTime - targetMediaTime) > 0.03) {
-      try {
-        activeEl.currentTime = targetMediaTime;
-      } catch {}
-    }
-  }, [playheadPosition, isPlaying, currentSegment, tracks]);
-
-  // RAPID PLAY / PAUSE HANDLER
-  useEffect(() => {
-    const activeEl = activeSlotRef.current === "A" ? videoRefA.current : videoRefB.current;
-
-    if (!isPlaying) {
-      audioMixerRef.current.pauseAll();
-      if (activeEl) {
-        if (playPromiseRef.current) {
-          playPromiseRef.current
-            .then(() => {
-              if (!isPlayingRef.current && activeEl && !activeEl.paused) {
-                activeEl.pause();
-              }
-            })
-            .catch(() => {});
-        } else if (!activeEl.paused) {
-          activeEl.pause();
-        }
-      }
-      setMeterL(-60);
-      setMeterR(-60);
-      return;
-    }
-
-    // Starting playback
-    audioMixerRef.current.sync(playheadPosition, tracks, true);
-
-    if (activeEl && currentSegment) {
-      const targetMediaTime = Math.max(
-        0,
-        currentSegment.trimIn + (playheadPosition - currentSegment.timelineStart)
-      );
-
-      if (Math.abs(activeEl.currentTime - targetMediaTime) > 0.08) {
-        try {
-          activeEl.currentTime = targetMediaTime;
-        } catch {}
-      }
-
-      if (activeEl.paused) {
-        playPromiseRef.current = activeEl.play().catch(() => {});
-      }
-    }
-  }, [isPlaying]);
-
-  // PREMIERE PRO MERCURY PLAYBACK ENGINE:
-  // Zero-Stutter Pre-Rolled Transitions + Multi-Track Audio Sync
+  // Pre-caching and syncing loop
   useEffect(() => {
     if (!isPlaying) return;
 
     let animationFrameId: number;
     let lastPerfTime = performance.now();
-    let isStandbyPreRolling = false;
+    let lastMeterTime = 0;
 
     const playbackLoop = (now: number) => {
-      const dt = (now - lastPerfTime) / 1000;
+      const dt = Math.min(0.1, (now - lastPerfTime) / 1000);
       lastPerfTime = now;
-
-      const currentSlot = activeSlotRef.current;
-      const activeEl = currentSlot === "A" ? videoRefA.current : videoRefB.current;
-      const standbyEl = currentSlot === "A" ? videoRefB.current : videoRefA.current;
 
       const currentPlayhead = useEditorStore.getState().playheadPosition;
       const currentOut = useEditorStore.getState().outPoint;
       const currentIn = useEditorStore.getState().inPoint;
 
-      // 1. Check Loop Out Point
-      if (currentOut !== null && currentPlayhead >= currentOut) {
-        const loopStart = currentIn || 0;
-        setPlayheadPosition(loopStart);
-        const seg = getSegmentAt(loopStart);
-        if (activeEl && seg) {
-          try {
-            activeEl.currentTime = seg.trimIn + (loopStart - seg.timelineStart);
-          } catch {}
-        }
-        audioMixerRef.current.sync(loopStart, tracks, true);
-        isStandbyPreRolling = false;
-        animationFrameId = requestAnimationFrame(playbackLoop);
-        return;
+      let nextPlayhead = currentPlayhead + dt;
+
+      // 1. Loop Out Check
+      if (currentOut !== null && nextPlayhead >= currentOut) {
+        nextPlayhead = currentIn || 0;
       }
 
-      // 2. Active Segment Evaluation
-      const activeSeg = getSegmentAt(currentPlayhead);
+      const activeSeg = getSegmentAt(nextPlayhead);
+      const nextSeg = getNextSegmentAfter(nextPlayhead);
+      
+      // Lean Decoder Pool: Keep strictly active clip + 1 upcoming clip in memory
+      const activeIds = new Set<string>();
+      if (activeSeg) activeIds.add(activeSeg.id);
+      if (nextSeg) activeIds.add(nextSeg.id);
 
-      if (activeSeg) {
-        // Inside an active video clip
-        if (activeEl) {
-          if (activeEl.paused && activeEl.readyState >= 2) {
-            playPromiseRef.current = activeEl.play().catch(() => {});
-          }
-
-          // DERIVE Master Sequence Time from hardware video clock
-          const mediaElapsed = Math.max(0, activeEl.currentTime - activeSeg.trimIn);
-          const hardwareSeqTime = activeSeg.timelineStart + mediaElapsed;
-          const timeToCut = activeSeg.timelineEnd - hardwareSeqTime;
-
-          const nextSeg = getNextSegmentAfter(activeSeg.timelineEnd);
-          const isAdjacentCut = nextSeg && Math.abs(nextSeg.timelineStart - activeSeg.timelineEnd) <= 0.08;
-
-          // PRE-ROLL DECK B 100ms BEFORE CUT: Start decoding frames in background!
-          if (isAdjacentCut && standbyEl && timeToCut <= 0.12 && timeToCut > 0 && !isStandbyPreRolling) {
-            isStandbyPreRolling = true;
-            standbyEl.play().catch(() => {});
-          }
-
-          // AT CUT BOUNDARY (0ms instant switch)
-          if (hardwareSeqTime >= activeSeg.timelineEnd - 0.02 || activeEl.ended) {
-            if (isAdjacentCut && standbyEl) {
-              // Switch active slot instantaneously
-              const newSlot = currentSlot === "A" ? "B" : "A";
-              activeSlotRef.current = newSlot;
-              setActiveSlot(newSlot);
-
-              // Direct DOM opacity update to prevent 1-frame React render delay!
-              if (videoRefA.current && videoRefB.current) {
-                if (newSlot === "B") {
-                  videoRefB.current.style.opacity = "1";
-                  videoRefB.current.style.zIndex = "10";
-                  videoRefA.current.style.opacity = "0";
-                  videoRefA.current.style.zIndex = "0";
-                } else {
-                  videoRefA.current.style.opacity = "1";
-                  videoRefA.current.style.zIndex = "10";
-                  videoRefB.current.style.opacity = "0";
-                  videoRefB.current.style.zIndex = "0";
-                }
-              }
-
-              activeEl.pause();
-              isStandbyPreRolling = false;
-              preSeekedSegmentIdRef.current = null;
-
-              setPlayheadPosition(nextSeg.timelineStart);
-              audioMixerRef.current.sync(nextSeg.timelineStart, tracks, true);
-            } else if (nextSeg) {
-              // Gap between clips
-              activeEl.pause();
-              isStandbyPreRolling = false;
-              const nextTime = currentPlayhead + dt;
-              setPlayheadPosition(nextTime);
-              audioMixerRef.current.sync(nextTime, tracks, true);
-            } else {
-              // Reached sequence end
-              setIsPlaying(false);
-              setPlayheadPosition(activeSeg.timelineEnd);
-              audioMixerRef.current.pauseAll();
-              return;
+      // Create only the active and upcoming video elements
+      for (const id of activeIds) {
+        if (!videoCacheRef.current.has(id)) {
+          const seg = activeSeg?.id === id ? activeSeg : nextSeg;
+          if (seg) {
+            const vid = document.createElement("video");
+            vid.src = convertFileSrc(seg.src);
+            vid.crossOrigin = "anonymous";
+            vid.preload = "auto";
+            vid.muted = true;
+            vid.playsInline = true;
+            // Pre-seek upcoming clip to trimIn so its first frame is decoded & ready
+            if (activeSeg?.id !== id) {
+              vid.currentTime = seg.trimIn;
             }
-          } else {
-            // Normal forward playback
-            setPlayheadPosition(hardwareSeqTime);
-            audioMixerRef.current.sync(hardwareSeqTime, tracks, true);
+            videoCacheRef.current.set(id, vid);
           }
-        } else {
-          const nextTime = currentPlayhead + dt;
-          setPlayheadPosition(nextTime);
-          audioMixerRef.current.sync(nextTime, tracks, true);
-        }
-      } else {
-        // Gap or empty area
-        const nextUpcoming = getNextSegmentAfter(currentPlayhead);
-        const nextPlayhead = currentPlayhead + dt;
-
-        if (nextUpcoming && nextPlayhead >= nextUpcoming.timelineStart) {
-          if (activeEl) {
-            try {
-              activeEl.currentTime = nextUpcoming.trimIn;
-            } catch {}
-            playPromiseRef.current = activeEl.play().catch(() => {});
-          }
-          setPlayheadPosition(nextUpcoming.timelineStart);
-          audioMixerRef.current.sync(nextUpcoming.timelineStart, tracks, true);
-        } else if (nextUpcoming) {
-          setPlayheadPosition(nextPlayhead);
-          audioMixerRef.current.sync(nextPlayhead, tracks, true);
-        } else {
-          setIsPlaying(false);
-          audioMixerRef.current.pauseAll();
-          return;
         }
       }
 
-      // 3. Audio VU Meter
-      const activeVoiceCount = audioMixerRef.current.getActiveVoiceCount();
-      if (!isMasterMuted && activeVoiceCount > 0) {
-        const base = -16 + Math.min(10, activeVoiceCount * 3) + Math.sin(now / 70) * 8;
-        setMeterL(Math.max(-48, Math.min(-1, base + Math.random() * 4)));
-        setMeterR(Math.max(-48, Math.min(-1, base + Math.random() * 5)));
+      // Cleanup any other video elements immediately to free hardware decoder streams
+      for (const [id, vid] of videoCacheRef.current.entries()) {
+        if (!activeIds.has(id)) {
+          vid.pause();
+          vid.removeAttribute("src");
+          vid.load();
+          videoCacheRef.current.delete(id);
+          const bmp = frameCacheRef.current.get(id);
+          if (bmp) bmp.close();
+          frameCacheRef.current.delete(id);
+        }
+      }
+
+      // Draw to canvas
+      const canvas = canvasRef.current;
+      const ctx = canvas?.getContext("2d");
+      
+      if (activeSeg) {
+        const vid = videoCacheRef.current.get(activeSeg.id);
+        if (vid) {
+          const expectedTime = activeSeg.trimIn + (nextPlayhead - activeSeg.timelineStart);
+          
+          if (vid.paused && vid.readyState >= 2) {
+             try {
+               if (Math.abs(vid.currentTime - expectedTime) > 0.08) {
+                 vid.currentTime = expectedTime;
+               }
+             } catch {}
+             vid.play().catch(() => {});
+          }
+          
+          // Smooth hardware clock sync with zero micro-stutter
+          if (!vid.paused && vid.readyState >= 2) {
+             const mediaElapsed = vid.currentTime - activeSeg.trimIn;
+             if (mediaElapsed >= 0 && mediaElapsed <= activeSeg.duration + 0.1) {
+                nextPlayhead = activeSeg.timelineStart + mediaElapsed;
+             }
+          }
+
+          if (canvas && ctx && vid.readyState >= 2) {
+             if (canvas.width !== vid.videoWidth || canvas.height !== vid.videoHeight) {
+                if (vid.videoWidth > 0 && vid.videoHeight > 0) {
+                   canvas.width = vid.videoWidth;
+                   canvas.height = vid.videoHeight;
+                }
+             }
+             ctx.drawImage(vid, 0, 0, canvas.width, canvas.height);
+          }
+          
+          // Seamless cut transition
+          if (nextPlayhead >= activeSeg.timelineEnd - 0.02) {
+             if (nextSeg && nextSeg.id !== activeSeg.id && Math.abs(nextSeg.timelineStart - activeSeg.timelineEnd) <= 0.08) {
+                nextPlayhead = nextSeg.timelineStart;
+                const nextVid = videoCacheRef.current.get(nextSeg.id);
+                if (nextVid) {
+                   nextVid.play().catch(() => {});
+                }
+             } else if (!nextSeg) {
+                setIsPlaying(false);
+                nextPlayhead = activeSeg.timelineEnd;
+             }
+          }
+        }
       } else {
-        setMeterL(-60);
-        setMeterR(-60);
+        if (canvas && ctx) {
+           ctx.clearRect(0, 0, canvas.width, canvas.height);
+        }
+        if (!nextSeg && nextPlayhead > totalDuration) {
+           setIsPlaying(false);
+           audioMixerRef.current.pauseAll();
+           return;
+        }
+      }
+
+      setPlayheadPosition(nextPlayhead);
+      audioMixerRef.current.sync(nextPlayhead, scheduleRef.current.audioSegments, true, false);
+
+      // Throttle VU meter updates to ~15 FPS to eliminate React reconciliation overhead
+      if (now - lastMeterTime > 66) {
+        lastMeterTime = now;
+        const activeVoices = audioMixerRef.current.getActiveVoiceCount();
+        if (!isMasterMuted && activeVoices > 0) {
+          const base = -16 + Math.min(10, activeVoices * 3) + Math.sin(now / 70) * 8;
+          setMeterL(Math.max(-48, Math.min(-1, base + Math.random() * 4)));
+          setMeterR(Math.max(-48, Math.min(-1, base + Math.random() * 5)));
+        } else {
+          setMeterL(-60);
+          setMeterR(-60);
+        }
       }
 
       animationFrameId = requestAnimationFrame(playbackLoop);
@@ -404,28 +250,130 @@ export function useVideoPlayback() {
       cancelAnimationFrame(animationFrameId);
       audioMixerRef.current.pauseAll();
     };
-  }, [isPlaying, getSegmentAt, getNextSegmentAfter, tracks, isMasterMuted, setIsPlaying, setPlayheadPosition]);
+  }, [isPlaying, getSegmentAt, getNextSegmentAfter, isMasterMuted, setIsPlaying, setPlayheadPosition, totalDuration]);
 
-  const activeVideoRef = activeSlot === "A" ? videoRefA : videoRefB;
+  // Scrubbing/seeking when paused
+  const isSeekingRef = useRef(false);
+  const pendingSeekTargetRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (isPlaying) return;
+
+    audioMixerRef.current.sync(playheadPosition, scheduleRef.current.audioSegments, false, true);
+
+    const activeSeg = getSegmentAt(playheadPosition);
+    if (!activeSeg) {
+       const canvas = canvasRef.current;
+       if (canvas) canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
+       return;
+    }
+
+    if (!videoCacheRef.current.has(activeSeg.id)) {
+       const vid = document.createElement("video");
+       vid.src = convertFileSrc(activeSeg.src);
+       vid.crossOrigin = "anonymous";
+       vid.preload = "auto";
+       vid.muted = true;
+       vid.playsInline = true;
+       videoCacheRef.current.set(activeSeg.id, vid);
+    }
+
+    const vid = videoCacheRef.current.get(activeSeg.id);
+    if (vid) {
+       const targetTime = activeSeg.trimIn + (playheadPosition - activeSeg.timelineStart);
+       
+       const draw = () => {
+          const canvas = canvasRef.current;
+          const ctx = canvas?.getContext("2d");
+          if (canvas && ctx && vid.readyState >= 2) {
+             if (canvas.width !== vid.videoWidth || canvas.height !== vid.videoHeight) {
+                if (vid.videoWidth > 0 && vid.videoHeight > 0) {
+                   canvas.width = vid.videoWidth;
+                   canvas.height = vid.videoHeight;
+                }
+             }
+             ctx.drawImage(vid, 0, 0, canvas.width, canvas.height);
+          }
+       };
+
+       // If video is not ready, instantly display cached thumbnail to prevent empty screen
+       if (vid.readyState < 2) {
+          const bmp = frameCacheRef.current.get(activeSeg.id);
+          if (bmp) {
+             const canvas = canvasRef.current;
+             const ctx = canvas?.getContext("2d");
+             if (canvas && ctx) {
+                 if (canvas.width !== bmp.width || canvas.height !== bmp.height) {
+                    canvas.width = bmp.width;
+                    canvas.height = bmp.height;
+                 }
+                 ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+             }
+          }
+       }
+
+       if (Math.abs(vid.currentTime - targetTime) > 0.04) {
+          if (isSeekingRef.current) {
+             pendingSeekTargetRef.current = targetTime;
+          } else {
+             isSeekingRef.current = true;
+             vid.currentTime = targetTime;
+             
+             const onSeeked = () => {
+                if (!frameCacheRef.current.has(activeSeg.id) && vid.readyState >= 2) {
+                   createImageBitmap(vid).then(bmp => frameCacheRef.current.set(activeSeg.id, bmp)).catch(() => {});
+                }
+                draw();
+                if (pendingSeekTargetRef.current !== null && Math.abs(vid.currentTime - pendingSeekTargetRef.current) > 0.04) {
+                   vid.currentTime = pendingSeekTargetRef.current;
+                   pendingSeekTargetRef.current = null;
+                } else {
+                   isSeekingRef.current = false;
+                   vid.removeEventListener("seeked", onSeeked);
+                }
+             };
+             vid.addEventListener("seeked", onSeeked);
+          }
+       } else if (vid.readyState >= 2) {
+          draw();
+       }
+    }
+  }, [playheadPosition, isPlaying, getSegmentAt]);
+
+  // Rapid Play/Pause hook
+  const resumeAudio = useCallback(() => {
+     audioMixerRef.current.ensureContext();
+  }, []);
+
+  useEffect(() => {
+    if (!isPlaying) {
+       audioMixerRef.current.pauseAll();
+       videoCacheRef.current.forEach(vid => vid.pause());
+       setMeterL(-60);
+       setMeterR(-60);
+    } else {
+       audioMixerRef.current.sync(playheadPosition, scheduleRef.current.audioSegments, true, true);
+       const activeSeg = getSegmentAt(playheadPosition);
+       if (activeSeg) {
+          const vid = videoCacheRef.current.get(activeSeg.id);
+          if (vid) vid.play().catch(() => {});
+       }
+    }
+  }, [isPlaying]);
 
   return {
-    videoRef: activeVideoRef,
-    videoRefA,
-    videoRefB,
-    srcA,
-    srcB,
-    activeSlot,
-    hasMedia: !!currentSegment || schedule.length > 0,
-    isAudible: !isMasterMuted && audioMixerRef.current.getActiveVoiceCount() > 0,
-    effectiveVolume: isMasterMuted ? 0 : masterVolume,
+    canvasRef,
+    hasMedia: schedule.videoSegments.length > 0 || schedule.audioSegments.length > 0,
     totalDuration,
     meterL,
     meterR,
     playheadPosition,
     isPlaying,
     setIsPlaying,
+    resumeAudio,
     inPoint,
     outPoint,
     setPlayheadPosition,
   };
 }
+

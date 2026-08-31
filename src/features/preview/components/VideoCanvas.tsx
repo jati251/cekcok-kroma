@@ -1,35 +1,21 @@
 import { ZoomMode, PlaybackResolution } from "../types";
 
 interface VideoCanvasProps {
-  videoRefA: React.RefObject<HTMLVideoElement | null>;
-  videoRefB: React.RefObject<HTMLVideoElement | null>;
-  srcA: string | null;
-  srcB: string | null;
-  activeSlot: "A" | "B";
+  canvasRef: React.RefObject<HTMLCanvasElement | null>;
   hasMedia: boolean;
-  isAudible: boolean;
-  effectiveVolume: number;
   showSafeMargins: boolean;
   snapshotFlash: boolean;
   zoomMode: ZoomMode;
   resolution: PlaybackResolution;
-  onEnded: () => void;
 }
 
 export function VideoCanvas({
-  videoRefA,
-  videoRefB,
-  srcA,
-  srcB,
-  activeSlot,
+  canvasRef,
   hasMedia,
-  isAudible,
-  effectiveVolume,
   showSafeMargins,
   snapshotFlash,
   zoomMode,
   resolution,
-  onEnded,
 }: VideoCanvasProps) {
   const getZoomStyle = () => {
     switch (zoomMode) {
@@ -64,59 +50,14 @@ export function VideoCanvas({
           className="relative w-full h-full flex items-center justify-center transition-transform duration-150"
           style={getZoomStyle()}
         >
-          {/* Dual Ping-Pong Buffer Video A */}
-          <video
-            ref={videoRefA}
-            src={srcA || undefined}
-            className={`absolute inset-0 w-full h-full object-contain ${
-              activeSlot === "A"
-                ? "opacity-100 z-10"
-                : "opacity-0 pointer-events-none z-0"
-            }`}
-            style={{
-              filter: getResolutionFilter(),
-              transform: "translateZ(0)",
-              willChange: "transform",
-            }}
-            preload="auto"
-            playsInline
-            muted={!isAudible || activeSlot !== "A"}
-            onEnded={onEnded}
-            onVolumeChange={(e) => {
-              const el = e.target as HTMLVideoElement;
-              if (el.volume !== effectiveVolume && isAudible) {
-                el.volume = effectiveVolume;
-              }
-            }}
+          {/* Main Compositor Canvas */}
+          <canvas
+            ref={canvasRef}
+            className="absolute inset-0 w-full h-full object-contain"
+            style={{ filter: getResolutionFilter() }}
           />
 
-          {/* Dual Ping-Pong Buffer Video B */}
-          <video
-            ref={videoRefB}
-            src={srcB || undefined}
-            className={`absolute inset-0 w-full h-full object-contain ${
-              activeSlot === "B"
-                ? "opacity-100 z-10"
-                : "opacity-0 pointer-events-none z-0"
-            }`}
-            style={{
-              filter: getResolutionFilter(),
-              transform: "translateZ(0)",
-              willChange: "transform",
-            }}
-            preload="auto"
-            playsInline
-            muted={!isAudible || activeSlot !== "B"}
-            onEnded={onEnded}
-            onVolumeChange={(e) => {
-              const el = e.target as HTMLVideoElement;
-              if (el.volume !== effectiveVolume && isAudible) {
-                el.volume = effectiveVolume;
-              }
-            }}
-          />
-
-          {/* Safe Margins Overlay (Action Safe 90% & Title Safe 80%) */}
+          {/* Safe Margins Overlay */}
           {showSafeMargins && (
             <div className="absolute inset-0 pointer-events-none flex items-center justify-center z-20">
               <div className="w-[90%] h-[90%] border border-cyan-400/40 absolute flex items-center justify-center">

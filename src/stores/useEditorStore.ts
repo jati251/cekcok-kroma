@@ -76,6 +76,7 @@ interface EditorStore {
   // Media Bin Items
   mediaItems: DragItem[];
   addMediaItem: (item: DragItem) => Promise<void>;
+  addMediaItems: (items: DragItem[]) => Promise<void>;
 }
 
 export const useEditorStore = create<EditorStore>((set, get) => ({
@@ -208,6 +209,14 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       set({ mediaItems: newDoc.mediaItems });
     } catch (e) {
       console.error("Failed to add media to bin:", e);
+    }
+  },
+  addMediaItems: async (items) => {
+    try {
+      const newDoc: DocumentState = await invoke("add_media_batch_to_bin", { items });
+      set({ mediaItems: newDoc.mediaItems });
+    } catch (e) {
+      console.error("Failed to add media batch to bin:", e);
     }
   },
 }));
