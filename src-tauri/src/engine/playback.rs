@@ -19,9 +19,22 @@ pub struct PlaybackSegment {
 /// Compiles multi-track video clips into a flat, chronologically ordered sequence of visible segments.
 /// Higher video tracks (V2 > V1) take precedence and occlude lower tracks, matching Premiere Pro logic.
 pub fn compile_playback_schedule(tracks: &[Track]) -> Vec<PlaybackSegment> {
-    let video_tracks: Vec<&Track> = tracks.iter().filter(|t| t.r#type == "video" && t.is_muted != Some(true)).collect();
+    let mut video_tracks: Vec<&Track> = tracks.iter().filter(|t| t.r#type == "video" && t.is_muted != Some(true)).collect();
 
-    // Collect all video clips
+    // Sort by visual hierarchy: higher track number (e.g. V3 > V2 > V1) has higher priority
+    video_tracks.sort_by(|a, b| {
+        let get_prio = |t: &Track| -> u32 {
+            let s = t.name.to_uppercase();
+            if let Some(num) = s.strip_prefix('V') {
+                num.parse::<u32>().unwrap_or(1)
+            } else {
+                1
+            }
+        };
+        get_prio(b).cmp(&get_prio(a)) // Descending: V2 before V1
+    });
+
+    // Collect all video clips in priority order
     let mut all_clips: Vec<(usize, &crate::state::DragItem, &str)> = Vec::new();
     for (track_idx, track) in video_tracks.iter().enumerate() {
         for item in &track.items {
