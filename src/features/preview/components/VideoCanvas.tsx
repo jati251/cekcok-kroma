@@ -7,12 +7,12 @@ interface VideoCanvasProps {
   srcB: string | null;
   activeSlot: "A" | "B";
   hasMedia: boolean;
+  isAudible: boolean;
+  effectiveVolume: number;
   showSafeMargins: boolean;
   snapshotFlash: boolean;
   zoomMode: ZoomMode;
   resolution: PlaybackResolution;
-  volume: number;
-  isMuted: boolean;
   onEnded: () => void;
 }
 
@@ -23,15 +23,14 @@ export function VideoCanvas({
   srcB,
   activeSlot,
   hasMedia,
+  isAudible,
+  effectiveVolume,
   showSafeMargins,
   snapshotFlash,
   zoomMode,
   resolution,
-  volume,
-  isMuted,
   onEnded,
 }: VideoCanvasProps) {
-  // Compute transform style based on zoomMode
   const getZoomStyle = () => {
     switch (zoomMode) {
       case "100%":
@@ -46,7 +45,6 @@ export function VideoCanvas({
     }
   };
 
-  // Compute CSS filter for playback resolution simulation
   const getResolutionFilter = () => {
     switch (resolution) {
       case "1/2":
@@ -82,12 +80,12 @@ export function VideoCanvas({
             }}
             preload="auto"
             playsInline
-            muted={isMuted || activeSlot !== "A"}
+            muted={!isAudible || activeSlot !== "A"}
             onEnded={onEnded}
             onVolumeChange={(e) => {
-              const v = (e.target as HTMLVideoElement).volume;
-              if (v !== volume && !isMuted) {
-                (e.target as HTMLVideoElement).volume = volume;
+              const el = e.target as HTMLVideoElement;
+              if (el.volume !== effectiveVolume && isAudible) {
+                el.volume = effectiveVolume;
               }
             }}
           />
@@ -108,12 +106,12 @@ export function VideoCanvas({
             }}
             preload="auto"
             playsInline
-            muted={isMuted || activeSlot !== "B"}
+            muted={!isAudible || activeSlot !== "B"}
             onEnded={onEnded}
             onVolumeChange={(e) => {
-              const v = (e.target as HTMLVideoElement).volume;
-              if (v !== volume && !isMuted) {
-                (e.target as HTMLVideoElement).volume = volume;
+              const el = e.target as HTMLVideoElement;
+              if (el.volume !== effectiveVolume && isAudible) {
+                el.volume = effectiveVolume;
               }
             }}
           />

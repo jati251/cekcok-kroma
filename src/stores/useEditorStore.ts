@@ -47,6 +47,10 @@ interface EditorStore {
   // Playback state
   isPlaying: boolean;
   setIsPlaying: (playing: boolean) => void;
+  masterVolume: number;
+  setMasterVolume: (vol: number) => void;
+  isMasterMuted: boolean;
+  toggleMasterMute: () => void;
 
   // Sequence Tracks & Locking & Muting
   tracks: Track[];
@@ -124,6 +128,10 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
 
   isPlaying: false,
   setIsPlaying: (playing) => set({ isPlaying: playing }),
+  masterVolume: 1,
+  setMasterVolume: (vol) => set({ masterVolume: Math.max(0, Math.min(1, vol)) }),
+  isMasterMuted: false,
+  toggleMasterMute: () => set((state) => ({ isMasterMuted: !state.isMasterMuted })),
 
   tracks: DEFAULT_TRACKS,
   setTracks: (updater) => set((state) => ({ tracks: updater(state.tracks) })),
