@@ -11,13 +11,19 @@ export function useVideoPlayback() {
   const inPoint = useEditorStore((state) => state.inPoint);
   const outPoint = useEditorStore((state) => state.outPoint);
 
-  // Ping-Pong Double-Buffered Video References
+  // Ping-Pong Double-Buffered Video References & Synchronous Slot Tracking
   const videoRefA = useRef<HTMLVideoElement>(null);
   const videoRefB = useRef<HTMLVideoElement>(null);
+  const activeSlotRef = useRef<"A" | "B">("A");
   const [activeSlot, setActiveSlot] = useState<"A" | "B">("A");
 
   const [srcA, setSrcA] = useState<string | null>(null);
   const [srcB, setSrcB] = useState<string | null>(null);
+
+  // Play Promise tracker for rapid play/pause without AbortError or decoder stall
+  const playPromiseRef = useRef<Promise<void> | null>(null);
+  const isPlayingRef = useRef<boolean>(false);
+  isPlayingRef.current = isPlaying;
 
   const [meterL, setMeterL] = useState(-60);
   const [meterR, setMeterR] = useState(-60);
@@ -62,7 +68,7 @@ export function useVideoPlayback() {
       const found = track.items.find(
         (item) =>
           item.id !== activeClip.id &&
-          Math.abs((item.start || 0) - currentEnd) <= 0.05
+          Math.abs((item.start || 0) - currentEnd) <= 0.08
       );
       if (found && found.src) {
         return found;
@@ -106,7 +112,7 @@ export function useVideoPlayback() {
   // Pre-seek standby video buffer to next clip's trimIn so it is primed in GPU memory
   useEffect(() => {
     if (!nextClip) return;
-    const standbyEl = activeSlot === "A" ? videoRefB.current : videoRefA.current;
+    const standbyEl = activeSlotRef.current === "A" ? videoRefB.current : videoRefA.current;
     if (standbyEl && standbyEl.readyState >= 1) {
       const target = nextClip.trimIn || 0;
       if (Math.abs(standbyEl.currentTime - target) > 0.05) {
@@ -117,21 +123,21 @@ export function useVideoPlayback() {
 
   // Audio Decoupling: Audio plays only when an unmuted audio clip covers current playhead
   useEffect(() => {
-    const activeEl = activeSlot === "A" ? videoRefA.current : videoRefB.current;
-    const standbyEl = activeSlot === "A" ? videoRefB.current : videoRefA.current;
+    const activeEl = activeSlotRef.current === "A" ? videoRefA.current : videoRefB.current;
+    const standbyEl = activeSlotRef.current === "A" ? videoRefB.current : videoRefA.current;
 
     if (activeEl) {
       activeEl.muted = !activeAudioClip;
     }
     if (standbyEl) {
-      standbyEl.muted = true; // Standby is always muted until promoted
+      standbyEl.muted = true;
     }
   }, [activeAudioClip, activeSlot]);
 
-  // Scrubbing & Seeking when paused
+  // Scrubbing & Seeking when paused: only seek if position actually changed
   useEffect(() => {
     if (isPlaying || !activeClip) return;
-    const activeEl = activeSlot === "A" ? videoRefA.current : videoRefB.current;
+    const activeEl = activeSlotRef.current === "A" ? videoRefA.current : videoRefB.current;
     if (!activeEl) return;
 
     const targetTime = Math.max(
@@ -142,35 +148,62 @@ export function useVideoPlayback() {
     if (Math.abs(activeEl.currentTime - targetTime) > 0.02) {
       activeEl.currentTime = targetTime;
     }
-  }, [playheadPosition, isPlaying, activeClip, activeSlot]);
+  }, [playheadPosition, isPlaying, activeClip]);
 
-  // Gapless Hardware-Synchronized Playback Engine with Ping-Pong Dual Buffering
+  // Rapid Play / Pause Handler: Zero Stutter, No Buffer Flush
   useEffect(() => {
-    const activeEl = activeSlot === "A" ? videoRefA.current : videoRefB.current;
-    const standbyEl = activeSlot === "A" ? videoRefB.current : videoRefA.current;
+    const activeEl = activeSlotRef.current === "A" ? videoRefA.current : videoRefB.current;
 
     if (!isPlaying) {
-      if (activeEl && !activeEl.paused) activeEl.pause();
-      if (standbyEl && !standbyEl.paused) standbyEl.pause();
+      if (activeEl) {
+        if (playPromiseRef.current) {
+          playPromiseRef.current
+            .then(() => {
+              if (!isPlayingRef.current && activeEl && !activeEl.paused) {
+                activeEl.pause();
+              }
+            })
+            .catch(() => {});
+        } else if (!activeEl.paused) {
+          activeEl.pause();
+        }
+      }
       setMeterL(-60);
       setMeterR(-60);
       return;
     }
 
-    let animationFrameId: number;
-    let lastPerfTime = performance.now();
-
-    // Start active video immediately
-    if (activeEl && activeClip && activeEl.paused) {
-      const initialSeek = Math.max(
+    // Resuming playback: only seek if displaced, otherwise start immediately without decoder flush!
+    if (activeEl && activeClip) {
+      const expectedTime = Math.max(
         0,
         playheadPosition - (activeClip.start || 0) + (activeClip.trimIn || 0)
       );
-      activeEl.currentTime = initialSeek;
-      activeEl.play().catch(() => {});
+
+      // ONLY seek if the user scrubbed to a different time while paused
+      if (Math.abs(activeEl.currentTime - expectedTime) > 0.05) {
+        activeEl.currentTime = expectedTime;
+      }
+
+      if (activeEl.paused) {
+        playPromiseRef.current = activeEl.play().catch(() => {});
+      }
     }
+  }, [isPlaying, activeClip]);
+
+  // Master Synchronous Playback Loop with Synchronous Slot Swapping
+  useEffect(() => {
+    if (!isPlaying) return;
+
+    let animationFrameId: number;
+    let lastPerfTime = performance.now();
 
     const playbackTick = (now: number) => {
+      // Always query slot synchronously from Ref
+      const currentSlot = activeSlotRef.current;
+      const activeEl = currentSlot === "A" ? videoRefA.current : videoRefB.current;
+      const standbyEl = currentSlot === "A" ? videoRefB.current : videoRefA.current;
+
       const currentPlayhead = useEditorStore.getState().playheadPosition;
       const currentOut = useEditorStore.getState().outPoint;
       const currentIn = useEditorStore.getState().inPoint;
@@ -194,13 +227,17 @@ export function useVideoPlayback() {
         const clipEndMediaTime = (activeClip.trimIn || 0) + (activeClip.duration || 0);
 
         // Gapless seamless transition check
-        if (hardwareTime >= clipEndMediaTime - 0.03) {
+        if (hardwareTime >= clipEndMediaTime - 0.02) {
           if (nextClip && standbyEl) {
-            // PING-PONG INSTANT SWAP (0ms Latency!)
+            // SYNCHRONOUS PING-PONG SWAP (0ms Latency!)
             activeEl.pause();
             standbyEl.currentTime = nextClip.trimIn || 0;
-            standbyEl.play().catch(() => {});
-            setActiveSlot((prev) => (prev === "A" ? "B" : "A"));
+            playPromiseRef.current = standbyEl.play().catch(() => {});
+
+            // Flip ref immediately so next tick immediately reads the new element!
+            const newSlot = currentSlot === "A" ? "B" : "A";
+            activeSlotRef.current = newSlot;
+            setActiveSlot(newSlot); // Update React UI opacity
             setPlayheadPosition(nextClip.start || 0);
           } else {
             const nextBoundary = (activeClip.start || 0) + (activeClip.duration || 0);
@@ -221,7 +258,7 @@ export function useVideoPlayback() {
           setMeterR(-60);
         }
       } else {
-        // Gap or standby buffer loading
+        // Gap or video buffering
         const dt = (now - lastPerfTime) / 1000;
         setPlayheadPosition(currentPlayhead + dt);
         setMeterL(-60);
@@ -234,7 +271,7 @@ export function useVideoPlayback() {
 
     animationFrameId = requestAnimationFrame(playbackTick);
     return () => cancelAnimationFrame(animationFrameId);
-  }, [isPlaying, activeClip, nextClip, activeSlot, activeAudioClip, setPlayheadPosition]);
+  }, [isPlaying, activeClip, nextClip, activeAudioClip, setPlayheadPosition]);
 
   // Primary active ref for external interactions (canvas snapshot, master volume, etc.)
   const activeVideoRef = activeSlot === "A" ? videoRefA : videoRefB;
