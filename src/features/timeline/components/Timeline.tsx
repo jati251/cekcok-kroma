@@ -1,6 +1,6 @@
 import { useRef, useEffect, useState, useCallback } from "react";
 import { useEditorStore } from "../../../stores/useEditorStore";
-import { DragItem } from "../../../types/editor";
+import { DragItem, Track } from "../../../types/editor";
 import { formatTimecode } from "../../../utils/timecode";
 import { calculateSnapPosition } from "../utils/snapHelper";
 import { TimeRuler } from "./TimeRuler";
@@ -133,19 +133,57 @@ export function Timeline() {
 
       commitHistory();
 
+      if (trackId === "NEW_VIDEO_TRACK") {
+        const vTracksCount = tracks.filter((t) => t.type === "video").length;
+        const newTrack: Track = {
+          id: `V${vTracksCount + 1}`,
+          name: `V${vTracksCount + 1}`,
+          type: "video",
+          items: [videoClip],
+          isLocked: false,
+          isMuted: false,
+        };
+        setTracks((prev) => [newTrack, ...prev]);
+        setSelectedClipId(videoClipId);
+        setDraggedItem(null);
+        setSnapGuideTime(null);
+        return;
+      }
+
+      if (trackId === "NEW_AUDIO_TRACK") {
+        const aTracksCount = tracks.filter((t) => t.type === "audio").length;
+        const newTrack: Track = {
+          id: `A${aTracksCount + 1}`,
+          name: `A${aTracksCount + 1}`,
+          type: "audio",
+          items: [audioClip],
+          isLocked: false,
+          isMuted: false,
+        };
+        setTracks((prev) => [...prev, newTrack]);
+        setSelectedClipId(audioClipId);
+        setDraggedItem(null);
+        setSnapGuideTime(null);
+        return;
+      }
+
       setTracks((prev) =>
         prev.map((track) => {
           if (track.id === trackId && !track.isLocked) {
-            return {
-              ...track,
-              items: [...track.items, videoClip],
-            };
-          }
-          if (track.id === "a1" && trackId.startsWith("v") && draggedItem.hasAudio !== false && !track.isLocked) {
-            return {
-              ...track,
-              items: [...track.items, audioClip],
-            };
+            // Drop on existing video track
+            if (track.type === "video") {
+              return {
+                ...track,
+                items: [...track.items, videoClip],
+              };
+            }
+            // Drop on existing audio track
+            if (track.type === "audio") {
+              return {
+                ...track,
+                items: [...track.items, audioClip],
+              };
+            }
           }
           return track;
         })
@@ -430,10 +468,14 @@ export function Timeline() {
       const trackDelta = Math.round(deltaY / 42);
       const newTrackIndex = currentTrackIndex + trackDelta;
 
-      if (newTrackIndex >= 0 && newTrackIndex < tracks.length) {
-        const sourceTrack = tracks[currentTrackIndex];
+      const sourceTrack = tracks[currentTrackIndex];
+      
+      if (newTrackIndex < 0 && sourceTrack.type === "video") {
+        setTargetTrackId("NEW_VIDEO_TRACK");
+      } else if (newTrackIndex >= tracks.length && sourceTrack.type === "audio") {
+        setTargetTrackId("NEW_AUDIO_TRACK");
+      } else if (newTrackIndex >= 0 && newTrackIndex < tracks.length) {
         const destTrack = tracks[newTrackIndex];
-
         if (!destTrack.isLocked && sourceTrack.type === destTrack.type) {
           setTargetTrackId(destTrack.id);
         }
@@ -481,9 +523,34 @@ export function Timeline() {
             return track;
           });
 
+          if (!movingItem) return prev;
+
           let result = updatedTracks;
-          if (finalDestTrackId !== draggingClip.trackId && movingItem) {
-            result = result.map((track) => {
+
+          if (finalDestTrackId === "NEW_VIDEO_TRACK") {
+            const vTracksCount = updatedTracks.filter((t) => t.type === "video").length;
+            const newTrack: Track = {
+              id: `V${vTracksCount + 1}`,
+              name: `V${vTracksCount + 1}`,
+              type: "video",
+              items: [movingItem],
+              isLocked: false,
+              isMuted: false,
+            };
+            result = [newTrack, ...updatedTracks];
+          } else if (finalDestTrackId === "NEW_AUDIO_TRACK") {
+            const aTracksCount = updatedTracks.filter((t) => t.type === "audio").length;
+            const newTrack: Track = {
+              id: `A${aTracksCount + 1}`,
+              name: `A${aTracksCount + 1}`,
+              type: "audio",
+              items: [movingItem],
+              isLocked: false,
+              isMuted: false,
+            };
+            result = [...updatedTracks, newTrack];
+          } else if (finalDestTrackId !== draggingClip.trackId) {
+            result = updatedTracks.map((track) => {
               if (track.id === finalDestTrackId) {
                 return {
                   ...track,
@@ -641,13 +708,24 @@ export function Timeline() {
 
           {/* Tracks Area */}
           <div
-            className="flex-1 relative pb-8"
+            className="flex-1 relative pb-16"
             onClick={(e) => {
-              if (e.target === e.currentTarget) {
-                setSelectedClipId(null);
-              }
+              if (e.target === e.currentTarget) setSelectedClipId(null);
             }}
           >
+            {/* NEW VIDEO TRACK DROP ZONE (Top) */}
+            {(targetTrackId === "NEW_VIDEO_TRACK" || draggedItem) && (
+              <div
+                onPointerUp={(e) => handlePointerUpBinDrop(e, "NEW_VIDEO_TRACK")}
+                className={`h-[42px] flex items-center justify-center border-b border-dashed border-accent/40 ${
+                  targetTrackId === "NEW_VIDEO_TRACK" ? "bg-accent/20" : "bg-transparent"
+                } transition-colors`}
+              >
+                <span className="text-xs text-accent/60 font-medium">
+                  + Drop to Create New Video Track
+                </span>
+              </div>
+            )}
             {tracks.map((track) => {
               const isDropTarget = targetTrackId === track.id && draggingClip?.trackId !== track.id;
 
@@ -709,6 +787,20 @@ export function Timeline() {
                 </div>
               );
             })}
+
+            {/* NEW AUDIO TRACK DROP ZONE (Bottom) */}
+            {(targetTrackId === "NEW_AUDIO_TRACK" || draggedItem) && (
+              <div
+                onPointerUp={(e) => handlePointerUpBinDrop(e, "NEW_AUDIO_TRACK")}
+                className={`h-[42px] flex items-center justify-center border-t border-dashed border-emerald-500/40 ${
+                  targetTrackId === "NEW_AUDIO_TRACK" ? "bg-emerald-500/20" : "bg-transparent"
+                } transition-colors`}
+              >
+                <span className="text-xs text-emerald-500/60 font-medium">
+                  + Drop to Create New Audio Track
+                </span>
+              </div>
+            )}
           </div>
         </div>
       </div>
