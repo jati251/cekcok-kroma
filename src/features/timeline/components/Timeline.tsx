@@ -19,6 +19,7 @@ export function Timeline() {
   const setSelectedClipId = useEditorStore((state) => state.setSelectedClipId);
   const tracks = useEditorStore((state) => state.tracks);
   const setTracks = useEditorStore((state) => state.setTracks);
+  const commitHistory = useEditorStore((state) => state.commitHistory);
   const toggleTrackLock = useEditorStore((state) => state.toggleTrackLock);
   const toggleTrackMute = useEditorStore((state) => state.toggleTrackMute);
   const linkedSelection = useEditorStore((state) => state.linkedSelection);
@@ -130,6 +131,8 @@ export function Timeline() {
         waveform: draggedItem.waveform || [],
       };
 
+      commitHistory();
+
       setTracks((prev) =>
         prev.map((track) => {
           if (track.id === trackId && !track.isLocked) {
@@ -205,6 +208,8 @@ export function Timeline() {
 
       const durA = clickTime - start;
       const durB = dur - durA;
+
+      commitHistory();
 
       setTracks((prev) => {
         let nextTracks = prev.map((t) => {
@@ -308,6 +313,8 @@ export function Timeline() {
       if (!trimmingClip) return;
       const deltaX = e.clientX - trimmingClip.initialX;
       let deltaSecs = deltaX / zoomLevel;
+
+      commitHistory();
 
       setTracks((prev) => {
         return prev.map((track) => {

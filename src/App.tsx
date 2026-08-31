@@ -7,6 +7,7 @@ import { Inspector } from "./features/inspector";
 import { DragGhost } from "./components/DragGhost";
 import { useEditorStore } from "./stores/useEditorStore";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
+import { useAppMenu } from "./hooks/useAppMenu";
 
 function App() {
   const draggedItem = useEditorStore((state) => state.draggedItem);
@@ -15,6 +16,8 @@ function App() {
 
   // Global Keyboard Shortcuts (Space, V, C, H, Delete, Frame steps)
   useKeyboardShortcuts();
+  // Native Menus and Undo/Redo/Save/Open Shortcuts
+  useAppMenu();
 
   // Global Pointer Tracker for Dragging Media to Timeline
   useEffect(() => {

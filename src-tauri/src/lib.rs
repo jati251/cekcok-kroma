@@ -16,6 +16,12 @@ pub fn run() {
         .setup(|app| {
             // Build Native OS Application Menu (macOS menu bar / Windows window menu)
             let file_menu = SubmenuBuilder::new(app, "File")
+                .text("new_project", "New Project\tCmdOrCtrl+N")
+                .text("open_project", "Open Project...\tCmdOrCtrl+O")
+                .separator()
+                .text("save_project", "Save Project\tCmdOrCtrl+S")
+                .text("save_project_as", "Save Project As...\tCmdOrCtrl+Shift+S")
+                .separator()
                 .text("import_media", "Import Media...\tCmdOrCtrl+I")
                 .separator()
                 .text("export_frame", "Export Frame...\tCmdOrCtrl+Shift+E")
@@ -25,8 +31,8 @@ pub fn run() {
                 .build()?;
 
             let edit_menu = SubmenuBuilder::new(app, "Edit")
-                .undo()
-                .redo()
+                .text("undo_action", "Undo\tCmdOrCtrl+Z")
+                .text("redo_action", "Redo\tCmdOrCtrl+Shift+Z")
                 .separator()
                 .cut()
                 .copy()
@@ -110,7 +116,9 @@ pub fn run() {
             commands::greet,
             commands::get_video_metadata,
             commands::get_audio_waveform,
-            commands::export_frame
+            commands::export_frame,
+            commands::save_project,
+            commands::load_project
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

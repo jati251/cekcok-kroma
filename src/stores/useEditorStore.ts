@@ -7,7 +7,24 @@ import { formatTimecode } from "../utils/timecode";
 export type { DragItem, Track, Tool, DragCursorPosition };
 export { formatTimecode };
 
+export interface DocumentState {
+  tracks: Track[];
+  mediaItems: DragItem[];
+}
+
 interface EditorStore {
+  // Project File state
+  projectFilePath: string | null;
+  setProjectFilePath: (path: string | null) => void;
+  loadDocumentState: (state: DocumentState) => void;
+
+  // History (Undo/Redo)
+  past: DocumentState[];
+  future: DocumentState[];
+  commitHistory: () => void;
+  undo: () => void;
+  redo: () => void;
+
   // Drag state
   draggedItem: DragItem | null;
   setDraggedItem: (item: DragItem | null) => void;
@@ -64,6 +81,73 @@ interface EditorStore {
 }
 
 export const useEditorStore = create<EditorStore>((set, get) => ({
+  projectFilePath: null,
+  setProjectFilePath: (path) => set({ projectFilePath: path }),
+  loadDocumentState: (docState) => set({
+    tracks: docState.tracks,
+    mediaItems: docState.mediaItems,
+    past: [],
+    future: [],
+    selectedClipId: null,
+  }),
+
+  past: [],
+  future: [],
+  commitHistory: () => {
+    const state = get();
+    // Save current document state to past
+    const currentDocState: DocumentState = {
+      tracks: JSON.parse(JSON.stringify(state.tracks)), // deep clone
+      mediaItems: JSON.parse(JSON.stringify(state.mediaItems)),
+    };
+    
+    // limit history size to 50
+    const newPast = [...state.past, currentDocState].slice(-50);
+    set({ past: newPast, future: [] });
+  },
+  
+  undo: () => {
+    const state = get();
+    if (state.past.length === 0) return;
+    
+    const previous = state.past[state.past.length - 1];
+    const newPast = state.past.slice(0, state.past.length - 1);
+    
+    const currentDocState: DocumentState = {
+      tracks: state.tracks,
+      mediaItems: state.mediaItems,
+    };
+    
+    set({
+      tracks: previous.tracks,
+      mediaItems: previous.mediaItems,
+      past: newPast,
+      future: [currentDocState, ...state.future],
+      selectedClipId: null,
+    });
+  },
+
+  redo: () => {
+    const state = get();
+    if (state.future.length === 0) return;
+    
+    const next = state.future[0];
+    const newFuture = state.future.slice(1);
+    
+    const currentDocState: DocumentState = {
+      tracks: state.tracks,
+      mediaItems: state.mediaItems,
+    };
+    
+    set({
+      tracks: next.tracks,
+      mediaItems: next.mediaItems,
+      past: [...state.past, currentDocState],
+      future: newFuture,
+      selectedClipId: null,
+    });
+  },
+
   draggedItem: null,
   setDraggedItem: (item) => set({ draggedItem: item }),
   dragCursor: null,
@@ -102,6 +186,8 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   deleteSelectedClip: () => {
     const state = get();
     if (!state.selectedClipId) return;
+
+    state.commitHistory();
 
     // If linkedSelection is ON, find and delete linked audio/video as well
     let linkedId: string | undefined;
@@ -153,6 +239,8 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   },
 
   mediaItems: [],
-  addMediaItem: (item) =>
-    set((state) => ({ mediaItems: [...state.mediaItems, item] })),
+  addMediaItem: (item) => {
+    get().commitHistory();
+    set((state) => ({ mediaItems: [...state.mediaItems, item] }));
+  },
 }));

@@ -167,3 +167,13 @@ pub fn export_frame(path: &str, timestamp: f64, output_path: &str) -> Result<Str
 
     Ok(output_path.to_string())
 }
+
+#[tauri::command]
+pub fn save_project(path: &str, data: &str) -> Result<(), String> {
+    std::fs::write(path, data).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn load_project(path: &str) -> Result<String, String> {
+    std::fs::read_to_string(path).map_err(|e| e.to_string())
+}
