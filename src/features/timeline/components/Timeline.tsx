@@ -18,6 +18,8 @@ export function Timeline() {
   const setSelectedClipId = useEditorStore((state) => state.setSelectedClipId);
   const tracks = useEditorStore((state) => state.tracks);
   const setTracks = useEditorStore((state) => state.setTracks);
+  const toggleTrackLock = useEditorStore((state) => state.toggleTrackLock);
+  const linkedSelection = useEditorStore((state) => state.linkedSelection);
   const inPoint = useEditorStore((state) => state.inPoint);
   const outPoint = useEditorStore((state) => state.outPoint);
   const setPlayheadPosition = useEditorStore((state) => state.setPlayheadPosition);
@@ -26,7 +28,7 @@ export function Timeline() {
   const timelineRef = useRef<HTMLDivElement>(null);
   const [timelineWidth, setTimelineWidth] = useState(1000);
 
-  // 2D Dragging state for clips (horizontal time + vertical track switching)
+  // 2D Dragging state for clips
   const [draggingClip, setDraggingClip] = useState<{
     trackId: string;
     itemIdx: number;
@@ -38,6 +40,18 @@ export function Timeline() {
 
   const [dragOffset, setDragOffset] = useState<number>(0);
   const [targetTrackId, setTargetTrackId] = useState<string | null>(null);
+
+  // Clip Edge Trimming State
+  const [trimmingClip, setTrimmingClip] = useState<{
+    trackId: string;
+    itemIdx: number;
+    edge: "left" | "right";
+    initialX: number;
+    initialStart: number;
+    initialDuration: number;
+    initialTrimIn: number;
+    linkedClipId?: string;
+  } | null>(null);
 
   useEffect(() => {
     if (timelineRef.current) {
@@ -54,6 +68,9 @@ export function Timeline() {
 
   // Drop media from MediaBin at mouse X timestamp + AUTOMATIC LINKED AUDIO TRACK SPAWN
   const handlePointerUpBinDrop = (e: React.PointerEvent, trackId: string) => {
+    const targetTrack = tracks.find((t) => t.id === trackId);
+    if (targetTrack?.isLocked) return;
+
     if (draggedItem && activeTool === "selection") {
       let dropTime = 0;
       if (timelineRef.current) {
@@ -86,7 +103,7 @@ export function Timeline() {
         start: dropTime,
         duration,
         trimIn: 0,
-        color: "#10b981", // Emerald green for Premiere Pro audio
+        color: "#10b981",
         waveform: draggedItem.waveform || [],
       };
 
@@ -121,6 +138,9 @@ export function Timeline() {
     item: DragItem
   ) => {
     e.stopPropagation();
+    const track = tracks.find((t) => t.id === trackId);
+    if (track?.isLocked) return;
+
     if (activeTool === "selection") {
       setSelectedClipId(item.id);
       (e.target as HTMLElement).setPointerCapture(e.pointerId);
@@ -132,14 +152,20 @@ export function Timeline() {
         initialX: e.clientX,
         initialY: e.clientY,
         initialStart: item.start || 0,
-        linkedClipId: item.linkedClipId,
+        linkedClipId: linkedSelection ? item.linkedClipId : undefined,
       });
     } else if (activeTool === "razor") {
-      // Linked Razor Cut: Cut both video and linked audio clip at the exact playhead position
+      // PROPER RAZOR CUT CROSS-LINKING
+      const cutTime = Date.now();
+      const videoA_id = `${item.id}-a1-${cutTime}`;
+      const videoB_id = `${item.id}-b1-${cutTime}`;
+      const audioA_id = item.linkedClipId ? `${item.linkedClipId}-a2-${cutTime}` : undefined;
+      const audioB_id = item.linkedClipId ? `${item.linkedClipId}-b2-${cutTime}` : undefined;
+
       setTracks((prev) => {
-        let nextTracks = prev.map((track) => {
-          if (track.id === trackId) {
-            const newItems = [...track.items];
+        let nextTracks = prev.map((t) => {
+          if (t.id === trackId) {
+            const newItems = [...t.items];
             const target = newItems[itemIdx];
 
             let splitPos = playheadPosition;
@@ -153,27 +179,33 @@ export function Timeline() {
             const durA = splitPos - start;
             const durB = dur - durA;
 
-            const clipA: DragItem = { ...target, id: `${target.id}-a1`, duration: durA };
+            const clipA: DragItem = {
+              ...target,
+              id: videoA_id,
+              linkedClipId: audioA_id,
+              duration: durA,
+            };
             const clipB: DragItem = {
               ...target,
-              id: `${target.id}-b1`,
+              id: videoB_id,
+              linkedClipId: audioB_id,
               start: splitPos,
               duration: durB,
               trimIn: (target.trimIn || 0) + durA,
             };
 
             newItems.splice(itemIdx, 1, clipA, clipB);
-            return { ...track, items: newItems };
+            return { ...t, items: newItems };
           }
-          return track;
+          return t;
         });
 
-        // Also cut linked clip on the other track
-        if (item.linkedClipId) {
-          nextTracks = nextTracks.map((track) => {
-            const linkedIdx = track.items.findIndex((i) => i.id === item.linkedClipId);
+        // Also cut linked audio clip and cross-link them together
+        if (linkedSelection && item.linkedClipId && audioA_id && audioB_id) {
+          nextTracks = nextTracks.map((t) => {
+            const linkedIdx = t.items.findIndex((i) => i.id === item.linkedClipId);
             if (linkedIdx !== -1) {
-              const newItems = [...track.items];
+              const newItems = [...t.items];
               const linkedTarget = newItems[linkedIdx];
 
               let splitPos = playheadPosition;
@@ -187,19 +219,25 @@ export function Timeline() {
               const durA = splitPos - start;
               const durB = dur - durA;
 
-              const linkedA: DragItem = { ...linkedTarget, id: `${linkedTarget.id}-a2`, duration: durA };
+              const linkedA: DragItem = {
+                ...linkedTarget,
+                id: audioA_id,
+                linkedClipId: videoA_id,
+                duration: durA,
+              };
               const linkedB: DragItem = {
                 ...linkedTarget,
-                id: `${linkedTarget.id}-b2`,
+                id: audioB_id,
+                linkedClipId: videoB_id,
                 start: splitPos,
                 duration: durB,
                 trimIn: (linkedTarget.trimIn || 0) + durA,
               };
 
               newItems.splice(linkedIdx, 1, linkedA, linkedB);
-              return { ...track, items: newItems };
+              return { ...t, items: newItems };
             }
-            return track;
+            return t;
           });
         }
 
@@ -208,16 +246,123 @@ export function Timeline() {
     }
   };
 
+  // Start trimming clip edge
+  const handleTrimStart = (
+    e: React.PointerEvent,
+    trackId: string,
+    itemIdx: number,
+    item: DragItem,
+    edge: "left" | "right"
+  ) => {
+    e.stopPropagation();
+    const track = tracks.find((t) => t.id === trackId);
+    if (track?.isLocked) return;
+
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    setTrimmingClip({
+      trackId,
+      itemIdx,
+      edge,
+      initialX: e.clientX,
+      initialStart: item.start || 0,
+      initialDuration: item.duration || 5,
+      initialTrimIn: item.trimIn || 0,
+      linkedClipId: linkedSelection ? item.linkedClipId : undefined,
+    });
+  };
+
+  // Trimming movement calculation
+  const handleTrimMove = useCallback(
+    (e: React.PointerEvent) => {
+      if (!trimmingClip) return;
+      const deltaX = e.clientX - trimmingClip.initialX;
+      const deltaSecs = deltaX / zoomLevel;
+
+      setTracks((prev) => {
+        return prev.map((track) => {
+          // Update main trimming clip
+          if (track.id === trimmingClip.trackId) {
+            const newItems = [...track.items];
+            const target = newItems[trimmingClip.itemIdx];
+            if (!target) return track;
+
+            if (trimmingClip.edge === "right") {
+              const newDur = Math.max(0.2, trimmingClip.initialDuration + deltaSecs);
+              newItems[trimmingClip.itemIdx] = { ...target, duration: newDur };
+            } else {
+              const clampedDelta = Math.min(trimmingClip.initialDuration - 0.2, deltaSecs);
+              const newStart = Math.max(0, trimmingClip.initialStart + clampedDelta);
+              const newDur = trimmingClip.initialDuration - clampedDelta;
+              const newTrimIn = (trimmingClip.initialTrimIn || 0) + clampedDelta;
+              newItems[trimmingClip.itemIdx] = {
+                ...target,
+                start: newStart,
+                duration: newDur,
+                trimIn: Math.max(0, newTrimIn),
+              };
+            }
+            return { ...track, items: newItems };
+          }
+
+          // If linked selection is ON, trim linked partner simultaneously!
+          if (trimmingClip.linkedClipId) {
+            const linkedIdx = track.items.findIndex((i) => i.id === trimmingClip.linkedClipId);
+            if (linkedIdx !== -1) {
+              const newItems = [...track.items];
+              const linkedTarget = newItems[linkedIdx];
+
+              if (trimmingClip.edge === "right") {
+                const newDur = Math.max(0.2, trimmingClip.initialDuration + deltaSecs);
+                newItems[linkedIdx] = { ...linkedTarget, duration: newDur };
+              } else {
+                const clampedDelta = Math.min(trimmingClip.initialDuration - 0.2, deltaSecs);
+                const newStart = Math.max(0, trimmingClip.initialStart + clampedDelta);
+                const newDur = trimmingClip.initialDuration - clampedDelta;
+                const newTrimIn = (trimmingClip.initialTrimIn || 0) + clampedDelta;
+                newItems[linkedIdx] = {
+                  ...linkedTarget,
+                  start: newStart,
+                  duration: newDur,
+                  trimIn: Math.max(0, newTrimIn),
+                };
+              }
+              return { ...track, items: newItems };
+            }
+          }
+
+          return track;
+        });
+      });
+    },
+    [trimmingClip, zoomLevel, setTracks]
+  );
+
+  const handleTrimEnd = useCallback(
+    (e: React.PointerEvent) => {
+      if (trimmingClip) {
+        try {
+          (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+        } catch {}
+        setTrimmingClip(null);
+      }
+    },
+    [trimmingClip]
+  );
+
   // 2D Dragging Movement (Horizontal Delta + Vertical Track Switching)
   const handleClipPointerMove = useCallback(
     (e: React.PointerEvent) => {
+      if (trimmingClip) {
+        handleTrimMove(e);
+        return;
+      }
       if (!draggingClip) return;
+
       const deltaX = e.clientX - draggingClip.initialX;
       const deltaY = e.clientY - draggingClip.initialY;
 
       setDragOffset(deltaX);
 
-      // Track height is 42px. Determine if user dragged up or down between tracks!
       const currentTrackIndex = tracks.findIndex((t) => t.id === draggingClip.trackId);
       const trackDelta = Math.round(deltaY / 42);
       const newTrackIndex = currentTrackIndex + trackDelta;
@@ -226,18 +371,22 @@ export function Timeline() {
         const sourceTrack = tracks[currentTrackIndex];
         const destTrack = tracks[newTrackIndex];
 
-        // Keep video on video tracks (V1, V2) and audio on audio tracks (A1)
-        if (sourceTrack.type === destTrack.type) {
+        if (!destTrack.isLocked && sourceTrack.type === destTrack.type) {
           setTargetTrackId(destTrack.id);
         }
       }
     },
-    [draggingClip, tracks]
+    [draggingClip, trimmingClip, handleTrimMove, tracks]
   );
 
-  // 2D Drag Drop Finalization (Update Time + Track Location in tandem with Linked Audio)
+  // 2D Drag Drop Finalization
   const handleClipPointerUp = useCallback(
     (e: React.PointerEvent) => {
+      if (trimmingClip) {
+        handleTrimEnd(e);
+        return;
+      }
+
       if (draggingClip) {
         try {
           (e.target as HTMLElement).releasePointerCapture(e.pointerId);
@@ -248,7 +397,6 @@ export function Timeline() {
         const finalDestTrackId = targetTrackId || draggingClip.trackId;
 
         setTracks((prev) => {
-          // Find dragged item
           let movingItem: DragItem | null = null;
           const updatedTracks = prev.map((track) => {
             if (track.id === draggingClip.trackId) {
@@ -256,7 +404,6 @@ export function Timeline() {
               if (item) {
                 movingItem = { ...item, start: newStart };
               }
-              // If moving to another track, remove from current
               if (finalDestTrackId !== draggingClip.trackId) {
                 return {
                   ...track,
@@ -271,7 +418,6 @@ export function Timeline() {
             return track;
           });
 
-          // Insert into destination track if changed
           let result = updatedTracks;
           if (finalDestTrackId !== draggingClip.trackId && movingItem) {
             result = result.map((track) => {
@@ -285,8 +431,8 @@ export function Timeline() {
             });
           }
 
-          // SYNC LINKED AUDIO: Also shift linked audio clip by the exact same deltaSecs!
-          if (draggingClip.linkedClipId) {
+          // SYNC LINKED CLIP if linkedSelection is ON
+          if (linkedSelection && draggingClip.linkedClipId) {
             result = result.map((track) => ({
               ...track,
               items: track.items.map((item) =>
@@ -305,7 +451,7 @@ export function Timeline() {
         setTargetTrackId(null);
       }
     },
-    [draggingClip, dragOffset, zoomLevel, targetTrackId, setTracks]
+    [draggingClip, trimmingClip, handleTrimEnd, dragOffset, zoomLevel, targetTrackId, linkedSelection, setTracks]
   );
 
   // Ruler scrubbing handler
@@ -404,21 +550,27 @@ export function Timeline() {
                   key={track.id}
                   onPointerUp={(e) => handlePointerUpBinDrop(e, track.id)}
                   className={`h-[42px] flex items-center relative transition-colors ${
-                    isDropTarget
+                    track.isLocked
+                      ? "bg-[repeating-linear-gradient(45deg,#1c1c1c,#1c1c1c_10px,#242424_10px,#242424_20px)] opacity-85"
+                      : isDropTarget
                       ? "bg-accent/20 ring-1 ring-accent"
                       : draggedItem
                       ? "bg-[#252525] ring-1 ring-accent/40"
                       : "bg-[var(--background)]"
                   } border-b border-[var(--panel-border)]`}
                 >
-                  <TrackHeader name={track.name} />
+                  <TrackHeader
+                    name={track.name}
+                    isLocked={track.isLocked}
+                    onToggleLock={() => toggleTrackLock(track.id)}
+                  />
 
                   <div className="flex-1 h-full relative">
                     {track.items.map((item, idx) => {
                       const isThisDragged =
                         draggingClip?.trackId === track.id && draggingClip?.itemIdx === idx;
                       const isLinkedToDragged =
-                        draggingClip?.linkedClipId === item.id;
+                        linkedSelection && draggingClip?.linkedClipId === item.id;
 
                       return (
                         <TimelineClip
@@ -429,16 +581,18 @@ export function Timeline() {
                           zoomLevel={zoomLevel}
                           isSelected={selectedClipId === item.id}
                           activeTool={activeTool}
+                          isTrackLocked={track.isLocked}
                           isBeingDragged={isThisDragged || isLinkedToDragged}
                           dragOffset={dragOffset}
                           onPointerDown={(e) => handleClipPointerDown(e, track.id, idx, item)}
                           onPointerMove={handleClipPointerMove}
                           onPointerUp={handleClipPointerUp}
+                          onTrimStart={(e, edge) => handleTrimStart(e, track.id, idx, item, edge)}
                         />
                       );
                     })}
 
-                    {draggedItem && (
+                    {draggedItem && !track.isLocked && (
                       <div className="absolute inset-y-[4px] right-2 left-2 border border-dashed border-accent/60 pointer-events-none bg-accent/5 rounded" />
                     )}
                   </div>

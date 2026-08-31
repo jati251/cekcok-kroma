@@ -7,11 +7,13 @@ interface TimelineClipProps {
   zoomLevel: number;
   isSelected: boolean;
   activeTool: Tool;
+  isTrackLocked?: boolean;
   isBeingDragged: boolean;
   dragOffset: number;
   onPointerDown: (e: React.PointerEvent) => void;
   onPointerMove: (e: React.PointerEvent) => void;
   onPointerUp: (e: React.PointerEvent) => void;
+  onTrimStart: (e: React.PointerEvent, edge: "left" | "right") => void;
 }
 
 export function TimelineClip({
@@ -20,39 +22,42 @@ export function TimelineClip({
   zoomLevel,
   isSelected,
   activeTool,
+  isTrackLocked,
   isBeingDragged,
   dragOffset,
   onPointerDown,
   onPointerMove,
   onPointerUp,
+  onTrimStart,
 }: TimelineClipProps) {
   const isAudio = trackId.startsWith("a") || item.color === "#10b981";
 
   const thumbUrl =
     !isAudio && item.src
-      ? `kromavideo://localhost/?path=${encodeURIComponent(item.src)}&t=${item.start || 0}`
+      ? `kromavideo://localhost/?path=${encodeURIComponent(item.src)}&t=${(item.trimIn || 0)}`
       : "";
 
-  const cursorClass =
-    activeTool === "razor"
-      ? "cursor-crosshair bg-red-800/80"
-      : "cursor-pointer hover:border-[#aaa]";
+  const cursorClass = isTrackLocked
+    ? "cursor-not-allowed opacity-75"
+    : activeTool === "razor"
+    ? "cursor-crosshair bg-red-800/80"
+    : "cursor-pointer hover:border-[#aaa]";
 
   const clipBg = isAudio ? "#064e3b" : item.color || "var(--accent)";
 
   return (
     <div
-      onClick={(e) => e.stopPropagation()} // CRITICAL: Stop propagation so container onClick doesn't deselect!
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
-      onPointerCancel={onPointerUp}
-      className={`absolute h-[34px] top-[4px] flex items-center px-1 shadow-sm border overflow-hidden rounded-[2px] select-none ${
+      onClick={(e) => e.stopPropagation()}
+      onPointerDown={isTrackLocked ? undefined : onPointerDown}
+      onPointerMove={isTrackLocked ? undefined : onPointerMove}
+      onPointerUp={isTrackLocked ? undefined : onPointerUp}
+      onPointerCancel={isTrackLocked ? undefined : onPointerUp}
+      className={`absolute h-[34px] top-[4px] flex items-center px-1 shadow-sm border overflow-hidden rounded-[2px] select-none group ${
         isSelected ? "border-white ring-1 ring-accent z-20" : "border-[#111] z-10"
       } ${cursorClass}`}
       style={{
         left: (item.start || 0) * zoomLevel,
-        width: (item.duration || 0) * zoomLevel,
+        width: Math.max(8, (item.duration || 0) * zoomLevel),
         backgroundColor: clipBg,
         backgroundImage: thumbUrl ? `url(${thumbUrl})` : "none",
         backgroundSize: "cover",
@@ -64,12 +69,10 @@ export function TimelineClip({
       {/* Dim Overlay */}
       <div className="absolute inset-0 bg-black/40 pointer-events-none" />
 
-      {/* Audio Waveform Canvas for Audio Clips */}
+      {/* Audio Waveform Visualization */}
       {isAudio && (
         <div className="absolute inset-0 pointer-events-none flex items-center px-1">
-          {/* Baseline */}
           <div className="w-full h-[1px] bg-emerald-400/40 absolute left-0" />
-          {/* Waveform bars */}
           <div className="w-full h-full flex items-center justify-between gap-[1px] py-1">
             {(item.waveform && item.waveform.length > 0
               ? item.waveform
@@ -94,6 +97,34 @@ export function TimelineClip({
         )}
         {item.name}
       </span>
+
+      {/* Interactive Left Trim Handle (Trim In) */}
+      {!isTrackLocked && activeTool === "selection" && (
+        <div
+          onPointerDown={(e) => {
+            e.stopPropagation();
+            onTrimStart(e, "left");
+          }}
+          className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-accent/80 active:bg-accent flex items-center justify-center z-30 transition-colors"
+          title="Trim In (Shorten/Lengthen Start)"
+        >
+          <div className="w-0.5 h-3 bg-white/70 rounded-full opacity-0 group-hover:opacity-100 transition-opacity" />
+        </div>
+      )}
+
+      {/* Interactive Right Trim Handle (Trim Out) */}
+      {!isTrackLocked && activeTool === "selection" && (
+        <div
+          onPointerDown={(e) => {
+            e.stopPropagation();
+            onTrimStart(e, "right");
+          }}
+          className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-accent/80 active:bg-accent flex items-center justify-center z-30 transition-colors"
+          title="Trim Out (Shorten/Lengthen End)"
+        >
+          <div className="w-0.5 h-3 bg-white/70 rounded-full opacity-0 group-hover:opacity-100 transition-opacity" />
+        </div>
+      )}
     </div>
   );
 }

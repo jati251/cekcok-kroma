@@ -18,6 +18,7 @@ export interface Track {
   id: string;
   name: string;
   type: "video" | "audio";
+  isLocked?: boolean;
   items: DragItem[];
 }
 

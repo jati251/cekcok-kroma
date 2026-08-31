@@ -31,6 +31,10 @@ interface EditorStore {
   setOutPoint: (pos: number | null) => void;
   stepFrame: (frames: number) => void;
 
+  // Linked Selection Toggle (Premiere Pro Cmd+L)
+  linkedSelection: boolean;
+  toggleLinkedSelection: () => void;
+
   // Clip Selection & Editing
   selectedClipId: string | null;
   setSelectedClipId: (id: string | null) => void;
@@ -40,9 +44,10 @@ interface EditorStore {
   isPlaying: boolean;
   setIsPlaying: (playing: boolean) => void;
 
-  // Sequence Tracks
+  // Sequence Tracks & Locking
   tracks: Track[];
   setTracks: (updater: (prev: Track[]) => Track[]) => void;
+  toggleTrackLock: (trackId: string) => void;
 
   // Media Bin Items
   mediaItems: DragItem[];
@@ -74,6 +79,10 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     set({ playheadPosition: Math.max(0, current + frames / DEFAULT_FPS) });
   },
 
+  linkedSelection: true,
+  toggleLinkedSelection: () =>
+    set((state) => ({ linkedSelection: !state.linkedSelection })),
+
   selectedClipId: null,
   setSelectedClipId: (id) => set({ selectedClipId: id }),
 
@@ -81,13 +90,15 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     const state = get();
     if (!state.selectedClipId) return;
 
-    // Find if the selected clip has a linked partner
+    // If linkedSelection is ON, find and delete linked audio/video as well
     let linkedId: string | undefined;
-    for (const t of state.tracks) {
-      const found = t.items.find((item) => item.id === state.selectedClipId);
-      if (found) {
-        linkedId = found.linkedClipId;
-        break;
+    if (state.linkedSelection) {
+      for (const t of state.tracks) {
+        const found = t.items.find((item) => item.id === state.selectedClipId);
+        if (found) {
+          linkedId = found.linkedClipId;
+          break;
+        }
       }
     }
 
@@ -95,7 +106,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       prev.map((t) => ({
         ...t,
         items: t.items.filter(
-          (item) => item.id !== state.selectedClipId && item.id !== linkedId
+          (item) => item.id !== state.selectedClipId && (!linkedId || item.id !== linkedId)
         ),
       }))
     );
@@ -107,6 +118,14 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
 
   tracks: DEFAULT_TRACKS,
   setTracks: (updater) => set((state) => ({ tracks: updater(state.tracks) })),
+
+  toggleTrackLock: (trackId: string) => {
+    set((state) => ({
+      tracks: state.tracks.map((t) =>
+        t.id === trackId ? { ...t, isLocked: !t.isLocked } : t
+      ),
+    }));
+  },
 
   mediaItems: [],
   addMediaItem: (item) =>
