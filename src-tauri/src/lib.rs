@@ -40,6 +40,8 @@ pub fn run() {
                     "-ss", t,
                     "-i", &path,
                     "-vframes", "1",
+                    "-s", "160x90",
+                    "-threads", "1",
                     "-f", "image2",
                     "-vcodec", "mjpeg",
                     "-" // output to stdout
