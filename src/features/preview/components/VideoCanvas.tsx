@@ -1,8 +1,12 @@
 import { ZoomMode, PlaybackResolution } from "../types";
 
 interface VideoCanvasProps {
-  videoRef: React.RefObject<HTMLVideoElement | null>;
-  activeVideoSrc: string | null;
+  videoRefA: React.RefObject<HTMLVideoElement | null>;
+  videoRefB: React.RefObject<HTMLVideoElement | null>;
+  srcA: string | null;
+  srcB: string | null;
+  activeSlot: "A" | "B";
+  hasMedia: boolean;
   showSafeMargins: boolean;
   snapshotFlash: boolean;
   zoomMode: ZoomMode;
@@ -13,8 +17,12 @@ interface VideoCanvasProps {
 }
 
 export function VideoCanvas({
-  videoRef,
-  activeVideoSrc,
+  videoRefA,
+  videoRefB,
+  srcA,
+  srcB,
+  activeSlot,
+  hasMedia,
   showSafeMargins,
   snapshotFlash,
   zoomMode,
@@ -53,15 +61,20 @@ export function VideoCanvas({
 
   return (
     <div className="flex-1 flex items-center justify-center relative overflow-hidden bg-[#0d0d0d] rounded-[2px] border border-[#222]">
-      {activeVideoSrc ? (
+      {hasMedia ? (
         <div
           className="relative w-full h-full flex items-center justify-center transition-transform duration-150"
           style={getZoomStyle()}
         >
+          {/* Dual Ping-Pong Buffer Video A */}
           <video
-            ref={videoRef}
-            src={activeVideoSrc}
-            className="w-full h-full object-contain"
+            ref={videoRefA}
+            src={srcA || undefined}
+            className={`absolute inset-0 w-full h-full object-contain ${
+              activeSlot === "A"
+                ? "opacity-100 z-10"
+                : "opacity-0 pointer-events-none z-0"
+            }`}
             style={{
               filter: getResolutionFilter(),
               transform: "translateZ(0)",
@@ -69,10 +82,35 @@ export function VideoCanvas({
             }}
             preload="auto"
             playsInline
-            muted={isMuted}
+            muted={isMuted || activeSlot !== "A"}
             onEnded={onEnded}
             onVolumeChange={(e) => {
-              // Ensure audio volume is respected
+              const v = (e.target as HTMLVideoElement).volume;
+              if (v !== volume && !isMuted) {
+                (e.target as HTMLVideoElement).volume = volume;
+              }
+            }}
+          />
+
+          {/* Dual Ping-Pong Buffer Video B */}
+          <video
+            ref={videoRefB}
+            src={srcB || undefined}
+            className={`absolute inset-0 w-full h-full object-contain ${
+              activeSlot === "B"
+                ? "opacity-100 z-10"
+                : "opacity-0 pointer-events-none z-0"
+            }`}
+            style={{
+              filter: getResolutionFilter(),
+              transform: "translateZ(0)",
+              willChange: "transform",
+            }}
+            preload="auto"
+            playsInline
+            muted={isMuted || activeSlot !== "B"}
+            onEnded={onEnded}
+            onVolumeChange={(e) => {
               const v = (e.target as HTMLVideoElement).volume;
               if (v !== volume && !isMuted) {
                 (e.target as HTMLVideoElement).volume = volume;
@@ -82,7 +120,7 @@ export function VideoCanvas({
 
           {/* Safe Margins Overlay (Action Safe 90% & Title Safe 80%) */}
           {showSafeMargins && (
-            <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
+            <div className="absolute inset-0 pointer-events-none flex items-center justify-center z-20">
               <div className="w-[90%] h-[90%] border border-cyan-400/40 absolute flex items-center justify-center">
                 <div className="w-[88.8%] h-[88.8%] border border-cyan-400/30 absolute" />
                 <div className="w-4 h-[1px] bg-cyan-400/60 absolute" />
@@ -93,7 +131,7 @@ export function VideoCanvas({
 
           {/* Camera Snapshot Flash */}
           {snapshotFlash && (
-            <div className="absolute inset-0 bg-white opacity-80 pointer-events-none transition-opacity duration-200" />
+            <div className="absolute inset-0 bg-white opacity-80 pointer-events-none transition-opacity duration-200 z-30" />
           )}
         </div>
       ) : (

@@ -11,10 +11,13 @@ export function useVideoPlayback() {
   const inPoint = useEditorStore((state) => state.inPoint);
   const outPoint = useEditorStore((state) => state.outPoint);
 
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const [activeVideoSrc, setActiveVideoSrc] = useState<string | null>(null);
-  const activeClipIdRef = useRef<string | null>(null);
-  const lastActiveClipIdRef = useRef<string | null>(null);
+  // Ping-Pong Double-Buffered Video References
+  const videoRefA = useRef<HTMLVideoElement>(null);
+  const videoRefB = useRef<HTMLVideoElement>(null);
+  const [activeSlot, setActiveSlot] = useState<"A" | "B">("A");
+
+  const [srcA, setSrcA] = useState<string | null>(null);
+  const [srcB, setSrcB] = useState<string | null>(null);
 
   const [meterL, setMeterL] = useState(-60);
   const [meterR, setMeterR] = useState(-60);
@@ -48,7 +51,27 @@ export function useVideoPlayback() {
     return null;
   }, [tracks, playheadPosition]);
 
-  // Find active audio clip on ANY unmuted audio track (A1, A2)
+  // Pre-load lookup: find the NEXT adjacent video clip on the timeline
+  const nextClip = useMemo(() => {
+    if (!activeClip) return null;
+    const currentEnd = (activeClip.start || 0) + (activeClip.duration || 0);
+    const videoTracks = tracks.filter((t) => t.type === "video");
+
+    for (let i = videoTracks.length - 1; i >= 0; i--) {
+      const track = videoTracks[i];
+      const found = track.items.find(
+        (item) =>
+          item.id !== activeClip.id &&
+          Math.abs((item.start || 0) - currentEnd) <= 0.05
+      );
+      if (found && found.src) {
+        return found;
+      }
+    }
+    return null;
+  }, [tracks, activeClip]);
+
+  // Active audio clip on any unmuted audio track
   const activeAudioClip = useMemo(() => {
     const audioTracks = tracks.filter((t) => t.type === "audio" && !t.isMuted);
     for (const track of audioTracks) {
@@ -62,72 +85,89 @@ export function useVideoPlayback() {
     return null;
   }, [tracks, playheadPosition]);
 
-  // Sync active video src ONLY when clip ID actually changes
+  // Sync Active & Standby Sources (Dual-Buffer Preloading)
   useEffect(() => {
-    const currentId = activeClip ? activeClip.id : null;
-    if (activeClipIdRef.current !== currentId) {
-      activeClipIdRef.current = currentId;
-      if (activeClip && activeClip.src) {
-        try {
-          const converted = convertFileSrc(activeClip.src);
-          setActiveVideoSrc(converted);
-        } catch (err) {
-          console.error("Failed to convert video src:", err);
-        }
-      } else {
-        setActiveVideoSrc(null);
+    const convertedActive = activeClip?.src ? convertFileSrc(activeClip.src) : null;
+    const convertedNext = nextClip?.src ? convertFileSrc(nextClip.src) : null;
+
+    if (activeSlot === "A") {
+      setSrcA((prev) => (prev !== convertedActive ? convertedActive : prev));
+      if (convertedNext) {
+        setSrcB((prev) => (prev !== convertedNext ? convertedNext : prev));
+      }
+    } else {
+      setSrcB((prev) => (prev !== convertedActive ? convertedActive : prev));
+      if (convertedNext) {
+        setSrcA((prev) => (prev !== convertedNext ? convertedNext : prev));
       }
     }
-  }, [activeClip]);
+  }, [activeClip, nextClip, activeSlot]);
 
-  // Audio Decoupling: Video audio is ONLY audible if an unmuted audio clip covers current playhead!
+  // Pre-seek standby video buffer to next clip's trimIn so it is primed in GPU memory
   useEffect(() => {
-    if (!videoRef.current) return;
-    if (activeAudioClip) {
-      videoRef.current.muted = false;
-    } else {
-      videoRef.current.muted = true;
+    if (!nextClip) return;
+    const standbyEl = activeSlot === "A" ? videoRefB.current : videoRefA.current;
+    if (standbyEl && standbyEl.readyState >= 1) {
+      const target = nextClip.trimIn || 0;
+      if (Math.abs(standbyEl.currentTime - target) > 0.05) {
+        standbyEl.currentTime = target;
+      }
     }
-  }, [activeAudioClip]);
+  }, [nextClip, activeSlot]);
+
+  // Audio Decoupling: Audio plays only when an unmuted audio clip covers current playhead
+  useEffect(() => {
+    const activeEl = activeSlot === "A" ? videoRefA.current : videoRefB.current;
+    const standbyEl = activeSlot === "A" ? videoRefB.current : videoRefA.current;
+
+    if (activeEl) {
+      activeEl.muted = !activeAudioClip;
+    }
+    if (standbyEl) {
+      standbyEl.muted = true; // Standby is always muted until promoted
+    }
+  }, [activeAudioClip, activeSlot]);
 
   // Scrubbing & Seeking when paused
   useEffect(() => {
-    if (isPlaying || !videoRef.current || !activeClip) return;
+    if (isPlaying || !activeClip) return;
+    const activeEl = activeSlot === "A" ? videoRefA.current : videoRefB.current;
+    if (!activeEl) return;
 
     const targetTime = Math.max(
       0,
       playheadPosition - (activeClip.start || 0) + (activeClip.trimIn || 0)
     );
 
-    if (Math.abs(videoRef.current.currentTime - targetTime) > 0.02) {
-      videoRef.current.currentTime = targetTime;
+    if (Math.abs(activeEl.currentTime - targetTime) > 0.02) {
+      activeEl.currentTime = targetTime;
     }
-  }, [playheadPosition, isPlaying, activeClip]);
+  }, [playheadPosition, isPlaying, activeClip, activeSlot]);
 
-  // Real-Time Hardware-Synchronized Playback Engine with Seamless Multi-Clip Transitions
+  // Gapless Hardware-Synchronized Playback Engine with Ping-Pong Dual Buffering
   useEffect(() => {
+    const activeEl = activeSlot === "A" ? videoRefA.current : videoRefB.current;
+    const standbyEl = activeSlot === "A" ? videoRefB.current : videoRefA.current;
+
     if (!isPlaying) {
-      if (videoRef.current && !videoRef.current.paused) {
-        videoRef.current.pause();
-      }
+      if (activeEl && !activeEl.paused) activeEl.pause();
+      if (standbyEl && !standbyEl.paused) standbyEl.pause();
       setMeterL(-60);
       setMeterR(-60);
-      lastActiveClipIdRef.current = null;
       return;
     }
 
     let animationFrameId: number;
     let lastPerfTime = performance.now();
 
-    // Start video playback immediately if clip is active
-    if (videoRef.current && activeClip) {
+    // Start active video immediately
+    if (activeEl && activeClip && activeEl.paused) {
       const initialSeek = Math.max(
         0,
         playheadPosition - (activeClip.start || 0) + (activeClip.trimIn || 0)
       );
-      videoRef.current.currentTime = initialSeek;
-      videoRef.current.play().catch(() => {});
-      lastActiveClipIdRef.current = activeClip.id;
+      activeEl.currentTime = initialSeek;
+      activeEl.play().catch(() => {});
     }
 
     const playbackTick = (now: number) => {
@@ -135,12 +175,12 @@ export function useVideoPlayback() {
       const currentOut = useEditorStore.getState().outPoint;
       const currentIn = useEditorStore.getState().inPoint;
 
-      // Loop handling if outPoint reached
+      // Loop handling
       if (currentOut !== null && currentPlayhead >= currentOut) {
         const loopStart = currentIn || 0;
         setPlayheadPosition(loopStart);
-        if (videoRef.current && activeClip) {
-          videoRef.current.currentTime = Math.max(
+        if (activeEl && activeClip) {
+          activeEl.currentTime = Math.max(
             0,
             loopStart - (activeClip.start || 0) + (activeClip.trimIn || 0)
           );
@@ -149,34 +189,29 @@ export function useVideoPlayback() {
         return;
       }
 
-      // Check if clip transition occurred (e.g. adjacent clip 1 -> clip 2)
-      const currentClipId = activeClip ? activeClip.id : null;
-      if (currentClipId !== lastActiveClipIdRef.current) {
-        lastActiveClipIdRef.current = currentClipId;
-        if (videoRef.current && activeClip) {
-          const seekTarget = Math.max(
-            0,
-            currentPlayhead - (activeClip.start || 0) + (activeClip.trimIn || 0)
-          );
-          videoRef.current.currentTime = seekTarget;
-          videoRef.current.play().catch(() => {});
-        }
-      }
-
-      if (videoRef.current && activeClip && !videoRef.current.paused) {
-        const hardwareTime = videoRef.current.currentTime;
+      if (activeEl && activeClip && !activeEl.paused) {
+        const hardwareTime = activeEl.currentTime;
         const clipEndMediaTime = (activeClip.trimIn || 0) + (activeClip.duration || 0);
 
-        if (hardwareTime >= clipEndMediaTime - 0.02) {
-          // Seamlessly advance playhead to the next clip's start boundary
-          const nextStart = (activeClip.start || 0) + (activeClip.duration || 0);
-          setPlayheadPosition(nextStart);
+        // Gapless seamless transition check
+        if (hardwareTime >= clipEndMediaTime - 0.03) {
+          if (nextClip && standbyEl) {
+            // PING-PONG INSTANT SWAP (0ms Latency!)
+            activeEl.pause();
+            standbyEl.currentTime = nextClip.trimIn || 0;
+            standbyEl.play().catch(() => {});
+            setActiveSlot((prev) => (prev === "A" ? "B" : "A"));
+            setPlayheadPosition(nextClip.start || 0);
+          } else {
+            const nextBoundary = (activeClip.start || 0) + (activeClip.duration || 0);
+            setPlayheadPosition(nextBoundary);
+          }
         } else {
           const newPos = (activeClip.start || 0) + (hardwareTime - (activeClip.trimIn || 0));
           setPlayheadPosition(newPos);
         }
 
-        // Audio VU meter (active only if audio track is unmuted)
+        // Audio VU meter
         if (activeAudioClip) {
           const base = -14 + Math.sin(now / 70) * 10;
           setMeterL(Math.max(-48, Math.min(-2, base + Math.random() * 4)));
@@ -186,7 +221,7 @@ export function useVideoPlayback() {
           setMeterR(-60);
         }
       } else {
-        // Gap on timeline or video buffering
+        // Gap or standby buffer loading
         const dt = (now - lastPerfTime) / 1000;
         setPlayheadPosition(currentPlayhead + dt);
         setMeterL(-60);
@@ -199,11 +234,19 @@ export function useVideoPlayback() {
 
     animationFrameId = requestAnimationFrame(playbackTick);
     return () => cancelAnimationFrame(animationFrameId);
-  }, [isPlaying, activeClip, activeAudioClip, setPlayheadPosition]);
+  }, [isPlaying, activeClip, nextClip, activeSlot, activeAudioClip, setPlayheadPosition]);
+
+  // Primary active ref for external interactions (canvas snapshot, master volume, etc.)
+  const activeVideoRef = activeSlot === "A" ? videoRefA : videoRefB;
 
   return {
-    videoRef,
-    activeVideoSrc,
+    videoRef: activeVideoRef,
+    videoRefA,
+    videoRefB,
+    srcA,
+    srcB,
+    activeSlot,
+    hasMedia: !!activeClip,
     totalDuration,
     meterL,
     meterR,

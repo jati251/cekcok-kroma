@@ -10,7 +10,12 @@ import { TransportBar } from "./TransportBar";
 export function ProgramMonitor() {
   const {
     videoRef,
-    activeVideoSrc,
+    videoRefA,
+    videoRefB,
+    srcA,
+    srcB,
+    activeSlot,
+    hasMedia,
     totalDuration,
     meterL,
     meterR,
@@ -82,8 +87,12 @@ export function ProgramMonitor() {
 
       <div className="flex-1 p-2 flex gap-2 relative bg-[#111] overflow-hidden">
         <VideoCanvas
-          videoRef={videoRef}
-          activeVideoSrc={activeVideoSrc}
+          videoRefA={videoRefA}
+          videoRefB={videoRefB}
+          srcA={srcA}
+          srcB={srcB}
+          activeSlot={activeSlot}
+          hasMedia={hasMedia}
           showSafeMargins={showSafeMargins}
           snapshotFlash={snapshotFlash}
           zoomMode={zoomMode}
