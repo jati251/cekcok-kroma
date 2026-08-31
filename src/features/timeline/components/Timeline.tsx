@@ -3,11 +3,21 @@ import { useEditorStore } from "../../../stores/useEditorStore";
 import { DragItem, Track } from "../../../types/editor";
 import { formatTimecode } from "../../../utils/timecode";
 import { calculateSnapPosition } from "../utils/snapHelper";
+import { overwriteClip } from "../utils/overwrite";
 import { TimeRuler } from "./TimeRuler";
 import { Playhead } from "./Playhead";
 import { TimelineHeader } from "./TimelineHeader";
 import { TrackHeader } from "./TrackHeader";
 import { TimelineClip } from "./TimelineClip";
+
+function PlayheadTimeDisplay() {
+  const playheadPosition = useEditorStore((state) => state.playheadPosition);
+  return (
+    <span className="text-[9px] text-accent font-mono tracking-wider">
+      {formatTimecode(playheadPosition).substring(3)}
+    </span>
+  );
+}
 
 export function Timeline() {
   const draggedItem = useEditorStore((state) => state.draggedItem);
@@ -27,7 +37,6 @@ export function Timeline() {
   const inPoint = useEditorStore((state) => state.inPoint);
   const outPoint = useEditorStore((state) => state.outPoint);
   const setPlayheadPosition = useEditorStore((state) => state.setPlayheadPosition);
-  const playheadPosition = useEditorStore((state) => state.playheadPosition);
 
   const timelineRef = useRef<HTMLDivElement>(null);
   const [timelineWidth, setTimelineWidth] = useState(1000);
@@ -95,7 +104,7 @@ export function Timeline() {
             candidateStart: dropTime,
             duration: draggedItem.duration || 5,
             tracks,
-            playheadPosition,
+            playheadPosition: useEditorStore.getState().playheadPosition,
             inPoint,
             outPoint,
             zoomLevel,
@@ -167,27 +176,37 @@ export function Timeline() {
         return;
       }
 
-      setTracks((prev) =>
-        prev.map((track) => {
+      setTracks((prev) => {
+        const next = [...prev];
+        const audioTargetId = trackId.startsWith("V") ? trackId.replace("V", "A") : trackId;
+        const hasAudioTarget = next.some((t) => t.id === audioTargetId);
+
+        if (!hasAudioTarget && trackId.startsWith("V")) {
+          next.push({
+            id: audioTargetId,
+            name: audioTargetId,
+            type: "audio",
+            items: [],
+            isLocked: false,
+            isMuted: false,
+          });
+        }
+
+        return next.map((track) => {
           if (track.id === trackId && !track.isLocked) {
-            // Drop on existing video track
             if (track.type === "video") {
-              return {
-                ...track,
-                items: [...track.items, videoClip],
-              };
+              return overwriteClip(track, videoClip);
             }
-            // Drop on existing audio track
             if (track.type === "audio") {
-              return {
-                ...track,
-                items: [...track.items, audioClip],
-              };
+              return overwriteClip(track, audioClip);
             }
           }
+          if (track.id === audioTargetId && trackId.startsWith("V") && !track.isLocked) {
+            return overwriteClip(track, audioClip);
+          }
           return track;
-        })
-      );
+        });
+      });
 
       setSelectedClipId(videoClipId);
       setDraggedItem(null);
@@ -223,7 +242,8 @@ export function Timeline() {
       });
     } else if (activeTool === "razor") {
       // CUT AT EXACT MOUSE CLICK POSITION
-      let clickTime = playheadPosition;
+      const currentPlayhead = useEditorStore.getState().playheadPosition;
+      let clickTime = currentPlayhead;
       if (timelineRef.current) {
         const rect = timelineRef.current.getBoundingClientRect();
         const scrollLeft = timelineRef.current.scrollLeft;
@@ -449,7 +469,7 @@ export function Timeline() {
           tracks,
           excludeClipId: draggingClip.clipId,
           excludeLinkedId: draggingClip.linkedClipId,
-          playheadPosition,
+          playheadPosition: useEditorStore.getState().playheadPosition,
           inPoint,
           outPoint,
           zoomLevel,
@@ -481,7 +501,7 @@ export function Timeline() {
         }
       }
     },
-    [draggingClip, trimmingClip, handleTrimMove, isSnapping, zoomLevel, tracks, playheadPosition, inPoint, outPoint]
+    [draggingClip, trimmingClip, handleTrimMove, isSnapping, zoomLevel, tracks, inPoint, outPoint]
   );
 
   // 2D Drag Drop Finalization
@@ -515,9 +535,11 @@ export function Timeline() {
                   items: track.items.filter((_, idx) => idx !== draggingClip.itemIdx),
                 };
               } else {
-                const newItems = [...track.items];
-                newItems[draggingClip.itemIdx] = movingItem!;
-                return { ...track, items: newItems };
+                const trackWithoutItem = {
+                  ...track,
+                  items: track.items.filter((_, idx) => idx !== draggingClip.itemIdx),
+                };
+                return overwriteClip(trackWithoutItem, movingItem!);
               }
             }
             return track;
@@ -552,10 +574,7 @@ export function Timeline() {
           } else if (finalDestTrackId !== draggingClip.trackId) {
             result = updatedTracks.map((track) => {
               if (track.id === finalDestTrackId) {
-                return {
-                  ...track,
-                  items: [...track.items, movingItem!],
-                };
+                return overwriteClip(track, movingItem!);
               }
               return track;
             });
@@ -656,9 +675,7 @@ export function Timeline() {
             }}
           >
             <div className="w-16 h-full border-r border-[var(--panel-border)] bg-[var(--panel-bg)] sticky left-0 z-50 flex items-center justify-center pointer-events-none">
-              <span className="text-[9px] text-accent font-mono tracking-wider">
-                {formatTimecode(playheadPosition).substring(3)}
-              </span>
+              <PlayheadTimeDisplay />
             </div>
 
             <div className="flex-1 relative overflow-hidden pointer-events-none">
