@@ -35,6 +35,10 @@ interface EditorStore {
   linkedSelection: boolean;
   toggleLinkedSelection: () => void;
 
+  // Snapping / Magnet Tool (Premiere Pro S)
+  isSnapping: boolean;
+  toggleSnapping: () => void;
+
   // Clip Selection & Editing
   selectedClipId: string | null;
   setSelectedClipId: (id: string | null) => void;
@@ -82,6 +86,10 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   linkedSelection: true,
   toggleLinkedSelection: () =>
     set((state) => ({ linkedSelection: !state.linkedSelection })),
+
+  isSnapping: true,
+  toggleSnapping: () =>
+    set((state) => ({ isSnapping: !state.isSnapping })),
 
   selectedClipId: null,
   setSelectedClipId: (id) => set({ selectedClipId: id }),

@@ -2,6 +2,7 @@ import { useRef, useEffect, useState, useCallback } from "react";
 import { useEditorStore } from "../../../stores/useEditorStore";
 import { DragItem } from "../../../types/editor";
 import { formatTimecode } from "../../../utils/timecode";
+import { calculateSnapPosition } from "../utils/snapHelper";
 import { TimeRuler } from "./TimeRuler";
 import { Playhead } from "./Playhead";
 import { TimelineHeader } from "./TimelineHeader";
@@ -20,6 +21,7 @@ export function Timeline() {
   const setTracks = useEditorStore((state) => state.setTracks);
   const toggleTrackLock = useEditorStore((state) => state.toggleTrackLock);
   const linkedSelection = useEditorStore((state) => state.linkedSelection);
+  const isSnapping = useEditorStore((state) => state.isSnapping);
   const inPoint = useEditorStore((state) => state.inPoint);
   const outPoint = useEditorStore((state) => state.outPoint);
   const setPlayheadPosition = useEditorStore((state) => state.setPlayheadPosition);
@@ -28,13 +30,16 @@ export function Timeline() {
   const timelineRef = useRef<HTMLDivElement>(null);
   const [timelineWidth, setTimelineWidth] = useState(1000);
 
-  // Razor Tool Cursor Position
+  // Visual Guide Lines
   const [razorHoverTime, setRazorHoverTime] = useState<number | null>(null);
+  const [snapGuideTime, setSnapGuideTime] = useState<number | null>(null);
 
   // 2D Dragging state for clips
   const [draggingClip, setDraggingClip] = useState<{
     trackId: string;
     itemIdx: number;
+    clipId: string;
+    duration: number;
     initialX: number;
     initialY: number;
     initialStart: number;
@@ -81,6 +86,20 @@ export function Timeline() {
         const scrollLeft = timelineRef.current.scrollLeft;
         const x = e.clientX - rect.left + scrollLeft - 64;
         dropTime = Math.max(0, x / zoomLevel);
+
+        // Snap drop time if snapping is active
+        if (isSnapping) {
+          const snap = calculateSnapPosition({
+            candidateStart: dropTime,
+            duration: draggedItem.duration || 5,
+            tracks,
+            playheadPosition,
+            inPoint,
+            outPoint,
+            zoomLevel,
+          });
+          dropTime = snap.snappedStart;
+        }
       }
 
       const duration = draggedItem.duration || 5;
@@ -130,6 +149,7 @@ export function Timeline() {
 
       setSelectedClipId(videoClipId);
       setDraggedItem(null);
+      setSnapGuideTime(null);
     }
   };
 
@@ -152,13 +172,15 @@ export function Timeline() {
       setDraggingClip({
         trackId,
         itemIdx,
+        clipId: item.id,
+        duration: item.duration || 5,
         initialX: e.clientX,
         initialY: e.clientY,
         initialStart: item.start || 0,
         linkedClipId: linkedSelection ? item.linkedClipId : undefined,
       });
     } else if (activeTool === "razor") {
-      // CUT AT EXACT MOUSE CLICK POSITION (NOT Playhead!)
+      // CUT AT EXACT MOUSE CLICK POSITION
       let clickTime = playheadPosition;
       if (timelineRef.current) {
         const rect = timelineRef.current.getBoundingClientRect();
@@ -170,7 +192,6 @@ export function Timeline() {
       const start = item.start || 0;
       const dur = item.duration || 0;
 
-      // Validate click is inside clip
       if (clickTime <= start + 0.05 || clickTime >= start + dur - 0.05) {
         return;
       }
@@ -211,10 +232,9 @@ export function Timeline() {
           return t;
         });
 
-        // Also cut linked clip if its track is NOT locked
         if (linkedSelection && item.linkedClipId && audioA_id && audioB_id) {
           nextTracks = nextTracks.map((t) => {
-            if (t.isLocked) return t; // Protected if locked!
+            if (t.isLocked) return t;
             const linkedIdx = t.items.findIndex((i) => i.id === item.linkedClipId);
             if (linkedIdx !== -1) {
               const newItems = [...t.items];
@@ -272,26 +292,25 @@ export function Timeline() {
     });
   };
 
-  // Trimming movement calculation
+  // Trimming movement with optional magnetic snapping
   const handleTrimMove = useCallback(
     (e: React.PointerEvent) => {
       if (!trimmingClip) return;
       const deltaX = e.clientX - trimmingClip.initialX;
-      const deltaSecs = deltaX / zoomLevel;
+      let deltaSecs = deltaX / zoomLevel;
 
       setTracks((prev) => {
         return prev.map((track) => {
           if (track.isLocked) return track;
 
-          // Update main trimming clip
           if (track.id === trimmingClip.trackId) {
             const newItems = [...track.items];
             const target = newItems[trimmingClip.itemIdx];
             if (!target) return track;
 
             if (trimmingClip.edge === "right") {
-              const newDur = Math.max(0.2, trimmingClip.initialDuration + deltaSecs);
-              newItems[trimmingClip.itemIdx] = { ...target, duration: newDur };
+              const rawDur = Math.max(0.2, trimmingClip.initialDuration + deltaSecs);
+              newItems[trimmingClip.itemIdx] = { ...target, duration: rawDur };
             } else {
               const clampedDelta = Math.min(trimmingClip.initialDuration - 0.2, deltaSecs);
               const newStart = Math.max(0, trimmingClip.initialStart + clampedDelta);
@@ -307,7 +326,6 @@ export function Timeline() {
             return { ...track, items: newItems };
           }
 
-          // If linked selection is ON and linked track is NOT locked, trim linked partner simultaneously
           if (trimmingClip.linkedClipId) {
             const linkedIdx = track.items.findIndex((i) => i.id === trimmingClip.linkedClipId);
             if (linkedIdx !== -1 && !track.isLocked) {
@@ -315,8 +333,8 @@ export function Timeline() {
               const linkedTarget = newItems[linkedIdx];
 
               if (trimmingClip.edge === "right") {
-                const newDur = Math.max(0.2, trimmingClip.initialDuration + deltaSecs);
-                newItems[linkedIdx] = { ...linkedTarget, duration: newDur };
+                const rawDur = Math.max(0.2, trimmingClip.initialDuration + deltaSecs);
+                newItems[linkedIdx] = { ...linkedTarget, duration: rawDur };
               } else {
                 const clampedDelta = Math.min(trimmingClip.initialDuration - 0.2, deltaSecs);
                 const newStart = Math.max(0, trimmingClip.initialStart + clampedDelta);
@@ -347,12 +365,13 @@ export function Timeline() {
           (e.target as HTMLElement).releasePointerCapture(e.pointerId);
         } catch {}
         setTrimmingClip(null);
+        setSnapGuideTime(null);
       }
     },
     [trimmingClip]
   );
 
-  // 2D Dragging Movement
+  // 2D Dragging Movement WITH PREMIERE PRO MAGNET SNAPPING!
   const handleClipPointerMove = useCallback(
     (e: React.PointerEvent) => {
       if (trimmingClip) {
@@ -364,8 +383,32 @@ export function Timeline() {
       const deltaX = e.clientX - draggingClip.initialX;
       const deltaY = e.clientY - draggingClip.initialY;
 
-      setDragOffset(deltaX);
+      let effectiveDeltaX = deltaX;
 
+      // PREMIERE PRO MAGNET SNAPPING SYSTEM
+      if (isSnapping) {
+        const rawStart = Math.max(0, draggingClip.initialStart + deltaX / zoomLevel);
+        const snap = calculateSnapPosition({
+          candidateStart: rawStart,
+          duration: draggingClip.duration,
+          tracks,
+          excludeClipId: draggingClip.clipId,
+          excludeLinkedId: draggingClip.linkedClipId,
+          playheadPosition,
+          inPoint,
+          outPoint,
+          zoomLevel,
+        });
+
+        effectiveDeltaX = (snap.snappedStart - draggingClip.initialStart) * zoomLevel;
+        setSnapGuideTime(snap.snapLineTime);
+      } else {
+        setSnapGuideTime(null);
+      }
+
+      setDragOffset(effectiveDeltaX);
+
+      // Track height is 42px: cross-track switching
       const currentTrackIndex = tracks.findIndex((t) => t.id === draggingClip.trackId);
       const trackDelta = Math.round(deltaY / 42);
       const newTrackIndex = currentTrackIndex + trackDelta;
@@ -379,7 +422,7 @@ export function Timeline() {
         }
       }
     },
-    [draggingClip, trimmingClip, handleTrimMove, tracks]
+    [draggingClip, trimmingClip, handleTrimMove, isSnapping, zoomLevel, tracks, playheadPosition, inPoint, outPoint]
   );
 
   // 2D Drag Drop Finalization
@@ -437,7 +480,6 @@ export function Timeline() {
           // SYNC LINKED CLIP: ONLY if linkedSelection is ON AND the linked track is NOT locked!
           if (linkedSelection && draggingClip.linkedClipId) {
             result = result.map((track) => {
-              // If the track containing the linked clip is locked, do not move it!
               if (track.isLocked) return track;
 
               return {
@@ -457,6 +499,7 @@ export function Timeline() {
         setDraggingClip(null);
         setDragOffset(0);
         setTargetTrackId(null);
+        setSnapGuideTime(null);
       }
     },
     [draggingClip, trimmingClip, handleTrimEnd, dragOffset, zoomLevel, targetTrackId, linkedSelection, setTracks]
@@ -505,7 +548,10 @@ export function Timeline() {
         className={`flex-1 relative overflow-x-auto overflow-y-hidden flex flex-col ${getTimelineCursorClass()}`}
         ref={timelineRef}
         onPointerMove={handleTimelinePointerMove}
-        onPointerLeave={() => setRazorHoverTime(null)}
+        onPointerLeave={() => {
+          setRazorHoverTime(null);
+          setSnapGuideTime(null);
+        }}
       >
         <div
           className="min-w-max relative flex-1 flex flex-col"
@@ -553,7 +599,17 @@ export function Timeline() {
           {/* Unified Playhead */}
           <Playhead zoomLevel={zoomLevel} timelineRef={timelineRef} />
 
-          {/* Laser Razor Cut Line (Follows Mouse Cursor when Razor Tool is Active) */}
+          {/* Magnet Snap Indicator Guide Line (Cyan Glow) */}
+          {snapGuideTime !== null && (
+            <div
+              className="absolute top-6 bottom-0 w-[1.5px] bg-cyan-400 shadow-[0_0_8px_rgba(34,211,238,1)] z-40 pointer-events-none flex flex-col items-center animate-pulse"
+              style={{ left: snapGuideTime * zoomLevel + 64 }}
+            >
+              <div className="w-2 h-2 bg-cyan-400 rotate-45 -mt-1 shadow" />
+            </div>
+          )}
+
+          {/* Laser Razor Cut Line (Red Glow) */}
           {activeTool === "razor" && razorHoverTime !== null && (
             <div
               className="absolute top-6 bottom-0 w-[1.5px] bg-red-500 shadow-[0_0_8px_rgba(239,68,68,1)] z-40 pointer-events-none flex flex-col items-center"
@@ -602,7 +658,6 @@ export function Timeline() {
                     {track.items.map((item, idx) => {
                       const isThisDragged =
                         draggingClip?.trackId === track.id && draggingClip?.itemIdx === idx;
-                      // Only show visual drag on linked clip if its track is NOT locked
                       const isLinkedToDragged =
                         linkedSelection &&
                         draggingClip?.linkedClipId === item.id &&

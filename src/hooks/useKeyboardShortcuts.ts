@@ -77,6 +77,10 @@ export function useKeyboardShortcuts() {
           setActiveTool("hand");
           break;
 
+        case "s":
+          useEditorStore.getState().toggleSnapping();
+          break;
+
         case " ":
           e.preventDefault();
           setIsPlaying(!useEditorStore.getState().isPlaying);

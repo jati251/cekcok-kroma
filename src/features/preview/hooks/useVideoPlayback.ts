@@ -13,6 +13,8 @@ export function useVideoPlayback() {
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const [activeVideoSrc, setActiveVideoSrc] = useState<string | null>(null);
+  const activeClipIdRef = useRef<string | null>(null);
+
   const [meterL, setMeterL] = useState(-60);
   const [meterR, setMeterR] = useState(-60);
 
@@ -28,10 +30,9 @@ export function useVideoPlayback() {
     return Math.max(max, 10);
   }, [tracks]);
 
-  // Find the top-most active video clip at current playhead position (V2 has priority over V1)
-  const activeClipInfo = useMemo(() => {
+  // Find top-most active clip at current playhead position
+  const activeClip = useMemo(() => {
     const videoTracks = tracks.filter((t) => t.id.startsWith("v"));
-    // Search in reverse (top track V2 first, then V1)
     for (let i = videoTracks.length - 1; i >= 0; i--) {
       const track = videoTracks[i];
       const clip = track.items.find(
@@ -40,44 +41,48 @@ export function useVideoPlayback() {
           playheadPosition < (item.start || 0) + (item.duration || 0)
       );
       if (clip && clip.src) {
-        const relativeTime = (playheadPosition - (clip.start || 0)) + (clip.trimIn || 0);
-        return { clip, relativeTime };
+        return clip;
       }
     }
     return null;
   }, [tracks, playheadPosition]);
 
-  // Sync active video src with active clip (turns null on timeline gap -> true black screen!)
+  // Sync active video src ONLY when clip ID actually changes (avoids 60fps re-render thrashing!)
   useEffect(() => {
-    if (activeClipInfo) {
-      try {
-        const converted = convertFileSrc(activeClipInfo.clip.src!);
-        setActiveVideoSrc((prev) => (prev === converted ? prev : converted));
-      } catch (err) {
-        console.error("Failed to convert video src:", err);
-      }
-    } else {
-      // In timeline gap: clear video src to show black screen
-      setActiveVideoSrc(null);
-    }
-  }, [activeClipInfo]);
-
-  // Sync scrubbing / seeking to relative clip time
-  useEffect(() => {
-    if (!videoRef.current || !activeClipInfo) return;
-
-    if (!isPlaying) {
-      const targetTime = Math.max(0, activeClipInfo.relativeTime);
-      if (Math.abs(videoRef.current.currentTime - targetTime) > 0.03) {
-        videoRef.current.currentTime = targetTime;
+    const currentId = activeClip ? activeClip.id : null;
+    if (activeClipIdRef.current !== currentId) {
+      activeClipIdRef.current = currentId;
+      if (activeClip && activeClip.src) {
+        try {
+          const converted = convertFileSrc(activeClip.src);
+          setActiveVideoSrc(converted);
+        } catch (err) {
+          console.error("Failed to convert video src:", err);
+        }
+      } else {
+        setActiveVideoSrc(null);
       }
     }
-  }, [activeClipInfo, isPlaying]);
+  }, [activeClip]);
 
-  // Master Sequence Clock & Playback Loop
+  // Scrubbing & Seeking when paused: Immediately seek video element without lag
+  useEffect(() => {
+    if (isPlaying || !videoRef.current || !activeClip) return;
+
+    const targetTime = Math.max(
+      0,
+      playheadPosition - (activeClip.start || 0) + (activeClip.trimIn || 0)
+    );
+
+    if (Math.abs(videoRef.current.currentTime - targetTime) > 0.02) {
+      videoRef.current.currentTime = targetTime;
+    }
+  }, [playheadPosition, isPlaying, activeClip]);
+
+  // Real-Time Hardware-Synchronized Playback Engine (Zero Delay!)
   useEffect(() => {
     if (!isPlaying) {
-      if (videoRef.current) {
+      if (videoRef.current && !videoRef.current.paused) {
         videoRef.current.pause();
       }
       setMeterL(-60);
@@ -85,47 +90,71 @@ export function useVideoPlayback() {
       return;
     }
 
-    let lastTime = performance.now();
     let animationFrameId: number;
+    let lastPerfTime = performance.now();
 
-    const sequenceTick = (now: number) => {
-      const dt = (now - lastTime) / 1000;
-      lastTime = now;
+    // Start video playback immediately if clip is active
+    if (videoRef.current && activeClip && videoRef.current.paused) {
+      const initialSeek = Math.max(
+        0,
+        playheadPosition - (activeClip.start || 0) + (activeClip.trimIn || 0)
+      );
+      videoRef.current.currentTime = initialSeek;
+      videoRef.current.play().catch(() => {});
+    }
 
-      // Advance master sequence playhead
+    const playbackTick = (now: number) => {
       const currentPlayhead = useEditorStore.getState().playheadPosition;
-      let nextPlayhead = currentPlayhead + dt;
-
-      // Check loop boundary if outPoint is set
       const currentOut = useEditorStore.getState().outPoint;
       const currentIn = useEditorStore.getState().inPoint;
-      if (currentOut !== null && nextPlayhead >= currentOut) {
-        nextPlayhead = currentIn || 0;
+
+      // Loop handling if outPoint reached
+      if (currentOut !== null && currentPlayhead >= currentOut) {
+        const loopStart = currentIn || 0;
+        setPlayheadPosition(loopStart);
+        if (videoRef.current && activeClip) {
+          videoRef.current.currentTime = Math.max(
+            0,
+            loopStart - (activeClip.start || 0) + (activeClip.trimIn || 0)
+          );
+        }
+        animationFrameId = requestAnimationFrame(playbackTick);
+        return;
       }
 
-      setPlayheadPosition(nextPlayhead);
+      if (videoRef.current && activeClip && !videoRef.current.paused) {
+        // HARDWARE MASTER CLOCK: Use video hardware time directly for zero delay!
+        const hardwareTime = videoRef.current.currentTime;
+        const clipEndMediaTime = (activeClip.trimIn || 0) + (activeClip.duration || 0);
 
-      // Play video if an active clip exists at current position
-      if (videoRef.current) {
-        if (videoRef.current.paused) {
-          videoRef.current.play().catch(() => {});
+        if (hardwareTime >= clipEndMediaTime) {
+          // Clip finished: advance to clip end
+          setPlayheadPosition((activeClip.start || 0) + (activeClip.duration || 0));
+        } else {
+          // Exact timeline position derived from video hardware decoder
+          const newPos = (activeClip.start || 0) + (hardwareTime - (activeClip.trimIn || 0));
+          setPlayheadPosition(newPos);
         }
 
-        // Animate audio meter
-        const base = -14 + Math.sin(now / 80) * 10;
+        // Animate VU meter based on audio playback
+        const base = -14 + Math.sin(now / 70) * 10;
         setMeterL(Math.max(-48, Math.min(-2, base + Math.random() * 4)));
         setMeterR(Math.max(-48, Math.min(-2, base + Math.random() * 5)));
       } else {
+        // Gap on timeline: advance with software timer
+        const dt = (now - lastPerfTime) / 1000;
+        setPlayheadPosition(currentPlayhead + dt);
         setMeterL(-60);
         setMeterR(-60);
       }
 
-      animationFrameId = requestAnimationFrame(sequenceTick);
+      lastPerfTime = now;
+      animationFrameId = requestAnimationFrame(playbackTick);
     };
 
-    animationFrameId = requestAnimationFrame(sequenceTick);
+    animationFrameId = requestAnimationFrame(playbackTick);
     return () => cancelAnimationFrame(animationFrameId);
-  }, [isPlaying, setPlayheadPosition]);
+  }, [isPlaying, activeClip, setPlayheadPosition]);
 
   return {
     videoRef,
