@@ -1,7 +1,7 @@
 import { motion } from "framer-motion";
 import { useEditorStore, DragItem } from "../../stores/useEditorStore";
 import { open } from "@tauri-apps/plugin-dialog";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 
 export function MediaBin() {
   const { setDraggedItem, mediaItems, addMediaItem } = useEditorStore();
@@ -17,22 +17,21 @@ export function MediaBin() {
       });
       
       if (typeof selected === 'string') {
-        const url = convertFileSrc(selected);
-        
-        // Get duration by creating a temporary hidden video element
-        const video = document.createElement('video');
-        video.src = url;
-        video.addEventListener('loadedmetadata', () => {
+        // Get duration by calling Rust backend (ffprobe)
+        try {
+          const metadata: { duration: number } = await invoke('get_video_metadata', { path: selected });
           const newItem: DragItem = {
             id: `media-${Date.now()}`,
             type: "media",
             name: selected.split('/').pop() || selected.split('\\').pop() || "Video",
             color: "#3b82f6",
             src: selected,
-            duration: video.duration,
+            duration: metadata.duration,
           };
           addMediaItem(newItem);
-        });
+        } catch (error) {
+          console.error("FFprobe error:", error);
+        }
       }
     } catch (err) {
       console.error("Failed to import media", err);
