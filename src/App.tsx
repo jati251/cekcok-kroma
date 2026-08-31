@@ -57,11 +57,14 @@ function App() {
 
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-background text-foreground text-[11px] font-sans selection:bg-accent/30">
-      {/* Header */}
-      <header className="flex items-center justify-between px-2 h-7 border-b border-[#141414] bg-[#2d2d2d] shrink-0">
-        <div className="flex items-center gap-3">
-          <div className="w-3 h-3 bg-[#c975ff] rounded-sm ml-1" /> {/* Adobe-like app icon color */}
-          <div className="flex gap-3 text-[#cccccc]">
+      {/* Header (Mac OS Overlay style) */}
+      <header 
+        data-tauri-drag-region 
+        className="flex items-center justify-between px-2 pl-[72px] h-7 border-b border-[var(--panel-border)] bg-[var(--panel-bg)] shrink-0 select-none"
+      >
+        <div className="flex items-center gap-3 pointer-events-none">
+          <div className="w-3 h-3 bg-[#c975ff] rounded-sm ml-1" />
+          <div className="flex gap-3 text-[#cccccc] text-[11px] pointer-events-auto">
             <button className="hover:bg-[#444] px-1.5 py-0.5 rounded cursor-default">File</button>
             <button className="hover:bg-[#444] px-1.5 py-0.5 rounded cursor-default">Edit</button>
             <button className="hover:bg-[#444] px-1.5 py-0.5 rounded cursor-default">Clip</button>

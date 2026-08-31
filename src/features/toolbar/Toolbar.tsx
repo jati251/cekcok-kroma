@@ -1,7 +1,8 @@
 import { useEditorStore } from "../../stores/useEditorStore";
 
 export function Toolbar() {
-  const { activeTool, setActiveTool } = useEditorStore();
+  const activeTool = useEditorStore(state => state.activeTool);
+  const setActiveTool = useEditorStore(state => state.setActiveTool);
 
   return (
     <div className="w-10 bg-[var(--panel-bg)] border border-[var(--panel-border)] flex flex-col items-center py-2 gap-2 shrink-0">

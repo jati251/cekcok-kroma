@@ -3,7 +3,11 @@ import { useEditorStore } from "../../stores/useEditorStore";
 import { convertFileSrc } from "@tauri-apps/api/core";
 
 export function ProgramMonitor() {
-  const { playheadPosition, mediaItems, setPlayheadPosition, isPlaying, setIsPlaying } = useEditorStore();
+  const playheadPosition = useEditorStore(state => state.playheadPosition);
+  const setPlayheadPosition = useEditorStore(state => state.setPlayheadPosition);
+  const mediaItems = useEditorStore(state => state.mediaItems);
+  const isPlaying = useEditorStore(state => state.isPlaying);
+  const setIsPlaying = useEditorStore(state => state.setIsPlaying);
   const videoRef = useRef<HTMLVideoElement>(null);
   const [activeVideoSrc, setActiveVideoSrc] = useState<string | null>(null);
   

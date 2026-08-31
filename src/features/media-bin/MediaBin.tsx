@@ -4,7 +4,9 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 
 export function MediaBin() {
-  const { setDraggedItem, mediaItems, addMediaItem } = useEditorStore();
+  const setDraggedItem = useEditorStore(state => state.setDraggedItem);
+  const mediaItems = useEditorStore(state => state.mediaItems);
+  const addMediaItem = useEditorStore(state => state.addMediaItem);
 
   const handleImport = async () => {
     try {

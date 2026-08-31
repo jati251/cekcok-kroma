@@ -1,50 +1,44 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
 
-@layer base {
-  :root {
-    --background: #181818;      /* Very dark background for app */
-    --foreground: #d1d5db;      /* Default text */
-    
-    --panel-bg: #232323;        /* Panel background (Premiere style) */
-    --panel-border: #111111;    /* Deep border */
-    
-    --primary: #383838;         /* Primary buttons / headers */
-    --primary-foreground: #ffffff;
-    
-    --secondary: #2d2d2d;       /* Secondary areas */
-    --secondary-foreground: #a1a1aa;
-    
-    --accent: #2d8ceb;          /* Premiere Pro blue highlight */
-    --accent-foreground: #ffffff;
+@theme {
+  --color-background: #181818;
+  --color-foreground: #d1d5db;
+  
+  --color-panel-bg: #232323;
+  --color-panel-border: #111111;
+  
+  --color-primary: #383838;
+  --color-primary-foreground: #ffffff;
+  
+  --color-secondary: #2d2d2d;
+  --color-secondary-foreground: #a1a1aa;
+  
+  --color-accent: #2d8ceb;
+  --color-accent-foreground: #ffffff;
 
-    --border: #141414;
-    --ring: #2d8ceb;
-    
-    --radius: 0px; /* Sharp corners for pro software look */
-  }
+  --color-border: #141414;
 }
 
 @layer base {
-  * {
-    @apply border-border;
-  }
   body {
-    @apply bg-background text-foreground antialiased text-[11px] font-sans;
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    -webkit-font-smoothing: antialiased;
+    font-size: 11px;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   }
+  
   /* Custom Scrollbar for Pro UI */
   ::-webkit-scrollbar {
     width: 10px;
     height: 10px;
   }
   ::-webkit-scrollbar-track {
-    background: var(--panel-bg); 
+    background: var(--color-panel-bg); 
   }
   ::-webkit-scrollbar-thumb {
     background: #444; 
-    border: 2px solid var(--panel-bg);
+    border: 2px solid var(--color-panel-bg);
   }
   ::-webkit-scrollbar-thumb:hover {
     background: #555; 
