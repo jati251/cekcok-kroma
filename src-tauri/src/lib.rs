@@ -1,5 +1,8 @@
 mod engine;
 mod commands;
+pub mod state;
+
+use tauri::Manager;
 
 use tauri::menu::{MenuBuilder, SubmenuBuilder};
 use tauri::Emitter;
@@ -14,6 +17,8 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
+            app.manage(state::AppState::default());
+            
             // Build Native OS Application Menu (macOS menu bar / Windows window menu)
             let file_menu = SubmenuBuilder::new(app, "File")
                 .text("new_project", "New Project\tCmdOrCtrl+N")
@@ -118,7 +123,15 @@ pub fn run() {
             commands::get_audio_waveform,
             commands::export_frame,
             commands::save_project,
-            commands::load_project
+            commands::load_project,
+            commands::get_state,
+            commands::add_media_to_bin,
+            commands::drop_clip_to_timeline,
+            commands::delete_clip,
+            commands::undo_action_cmd,
+            commands::redo_action_cmd,
+            commands::split_clip_cmd,
+            commands::trim_clip_cmd
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

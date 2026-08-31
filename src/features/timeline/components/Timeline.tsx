@@ -1,9 +1,9 @@
-import { useRef, useEffect, useState, useCallback } from "react";
+import { useRef, useState, useCallback, useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { useEditorStore } from "../../../stores/useEditorStore";
-import { DragItem, Track } from "../../../types/editor";
+import { DragItem } from "../../../types/editor";
 import { formatTimecode } from "../../../utils/timecode";
 import { calculateSnapPosition } from "../utils/snapHelper";
-import { overwriteClip } from "../utils/overwrite";
 import { TimeRuler } from "./TimeRuler";
 import { Playhead } from "./Playhead";
 import { TimelineHeader } from "./TimelineHeader";
@@ -28,8 +28,7 @@ export function Timeline() {
   const selectedClipId = useEditorStore((state) => state.selectedClipId);
   const setSelectedClipId = useEditorStore((state) => state.setSelectedClipId);
   const tracks = useEditorStore((state) => state.tracks);
-  const setTracks = useEditorStore((state) => state.setTracks);
-  const commitHistory = useEditorStore((state) => state.commitHistory);
+  const fetchState = useEditorStore((state) => state.fetchState);
   const toggleTrackLock = useEditorStore((state) => state.toggleTrackLock);
   const toggleTrackMute = useEditorStore((state) => state.toggleTrackMute);
   const linkedSelection = useEditorStore((state) => state.linkedSelection);
@@ -86,7 +85,7 @@ export function Timeline() {
   }, []);
 
   // Drop media from MediaBin at mouse X timestamp
-  const handlePointerUpBinDrop = (e: React.PointerEvent, trackId: string) => {
+  const handlePointerUpBinDrop = async (e: React.PointerEvent, trackId: string) => {
     const targetTrack = tracks.find((t) => t.id === trackId);
     if (targetTrack?.isLocked) return;
 
@@ -140,77 +139,20 @@ export function Timeline() {
         waveform: draggedItem.waveform || [],
       };
 
-      commitHistory();
-
-      if (trackId === "NEW_VIDEO_TRACK") {
-        const vTracksCount = tracks.filter((t) => t.type === "video").length;
-        const newTrack: Track = {
-          id: `V${vTracksCount + 1}`,
-          name: `V${vTracksCount + 1}`,
-          type: "video",
-          items: [videoClip],
-          isLocked: false,
-          isMuted: false,
-        };
-        setTracks((prev) => [newTrack, ...prev]);
+      try {
+        await invoke("drop_clip_to_timeline", {
+          trackId,
+          videoClip,
+          audioClip: draggedItem.hasAudio !== false ? audioClip : null
+        });
+        
+        await fetchState();
         setSelectedClipId(videoClipId);
         setDraggedItem(null);
         setSnapGuideTime(null);
-        return;
+      } catch (err) {
+        console.error("Failed to drop clip:", err);
       }
-
-      if (trackId === "NEW_AUDIO_TRACK") {
-        const aTracksCount = tracks.filter((t) => t.type === "audio").length;
-        const newTrack: Track = {
-          id: `A${aTracksCount + 1}`,
-          name: `A${aTracksCount + 1}`,
-          type: "audio",
-          items: [audioClip],
-          isLocked: false,
-          isMuted: false,
-        };
-        setTracks((prev) => [...prev, newTrack]);
-        setSelectedClipId(audioClipId);
-        setDraggedItem(null);
-        setSnapGuideTime(null);
-        return;
-      }
-
-      setTracks((prev) => {
-        const next = [...prev];
-        const audioTargetId = trackId.startsWith("V") ? trackId.replace("V", "A") : trackId;
-        const hasAudioTarget = next.some((t) => t.id === audioTargetId);
-
-        if (!hasAudioTarget && trackId.startsWith("V")) {
-          next.push({
-            id: audioTargetId,
-            name: audioTargetId,
-            type: "audio",
-            items: [],
-            isLocked: false,
-            isMuted: false,
-          });
-        }
-
-        return next.map((track) => {
-          if (track.id === trackId && !track.isLocked) {
-            if (track.type === "video") {
-              return overwriteClip(track, videoClip);
-            }
-            if (track.type === "audio") {
-              return overwriteClip(track, audioClip);
-            }
-          }
-          if (track.id === audioTargetId && trackId.startsWith("V") && !track.isLocked) {
-            return overwriteClip(track, audioClip);
-          }
-          return track;
-        });
-      });
-
-      setSelectedClipId(videoClipId);
-      setDraggedItem(null);
-      setSnapGuideTime(null);
     }
   };
 
@@ -244,99 +186,23 @@ export function Timeline() {
       // CUT AT EXACT MOUSE CLICK POSITION
       const currentPlayhead = useEditorStore.getState().playheadPosition;
       let clickTime = currentPlayhead;
-      if (timelineRef.current) {
-        const rect = timelineRef.current.getBoundingClientRect();
-        const scrollLeft = timelineRef.current.scrollLeft;
-        const mouseX = e.clientX - rect.left + scrollLeft - 64;
-        clickTime = Math.max(0, mouseX / zoomLevel);
-      }
-
+      const rect = (e.target as HTMLElement).getBoundingClientRect();
+      const clickX = e.clientX - rect.left;
       const start = item.start || 0;
-      const dur = item.duration || 0;
+      const dur = item.duration || 5;
+      clickTime = start + clickX / zoomLevel;
 
       if (clickTime <= start + 0.05 || clickTime >= start + dur - 0.05) {
         return;
       }
 
-      const cutTime = Date.now();
-      const clipA_id = `${item.id}-a1-${cutTime}`;
-      const clipB_id = `${item.id}-b1-${cutTime}`;
-      const linkedA_id = item.linkedClipId ? `${item.linkedClipId}-a2-${cutTime}` : undefined;
-      const linkedB_id = item.linkedClipId ? `${item.linkedClipId}-b2-${cutTime}` : undefined;
-
-      const durA = clickTime - start;
-      const durB = dur - durA;
-
-      commitHistory();
-
-      setTracks((prev) => {
-        let nextTracks = prev.map((t) => {
-          if (t.id === trackId && !t.isLocked) {
-            const newItems = [...t.items];
-            const target = newItems[itemIdx];
-
-            const clipA: DragItem = {
-              ...target,
-              id: clipA_id,
-              linkedClipId: linkedA_id,
-              duration: durA,
-            };
-            const clipB: DragItem = {
-              ...target,
-              id: clipB_id,
-              linkedClipId: linkedB_id,
-              start: clickTime,
-              duration: durB,
-              trimIn: (target.trimIn || 0) + durA,
-            };
-
-            newItems.splice(itemIdx, 1, clipA, clipB);
-            return { ...t, items: newItems };
-          }
-          return t;
-        });
-
-        // Cut linked clip ONLY if its track is not locked and clickTime is within its bounds
-        if (linkedSelection && item.linkedClipId && linkedA_id && linkedB_id) {
-          nextTracks = nextTracks.map((t) => {
-            if (t.isLocked) return t;
-            const linkedIdx = t.items.findIndex((i) => i.id === item.linkedClipId);
-            if (linkedIdx !== -1) {
-              const newItems = [...t.items];
-              const linkedTarget = newItems[linkedIdx];
-              const lStart = linkedTarget.start || 0;
-              const lDur = linkedTarget.duration || 0;
-
-              // Only cut if clickTime falls within the linked clip's actual boundaries
-              if (clickTime > lStart + 0.05 && clickTime < lStart + lDur - 0.05) {
-                const lDurA = clickTime - lStart;
-                const lDurB = lDur - lDurA;
-
-                const linkedA: DragItem = {
-                  ...linkedTarget,
-                  id: linkedA_id,
-                  linkedClipId: clipA_id,
-                  duration: lDurA,
-                };
-                const linkedB: DragItem = {
-                  ...linkedTarget,
-                  id: linkedB_id,
-                  linkedClipId: clipB_id,
-                  start: clickTime,
-                  duration: lDurB,
-                  trimIn: (linkedTarget.trimIn || 0) + lDurA,
-                };
-
-                newItems.splice(linkedIdx, 1, linkedA, linkedB);
-                return { ...t, items: newItems };
-              }
-            }
-            return t;
-          });
-        }
-
-        return nextTracks;
-      });
+      invoke("split_clip_cmd", {
+        clipId: item.id,
+        timestamp: clickTime,
+        linkedSelection,
+      })
+        .then(() => fetchState())
+        .catch((err) => console.error("Failed to split clip:", err));
     }
   };
 
@@ -365,85 +231,43 @@ export function Timeline() {
     });
   };
 
-  // Trimming movement with optional magnetic snapping
+  // Trimming movement (Local visual override)
   const handleTrimMove = useCallback(
-    (e: React.PointerEvent) => {
-      if (!trimmingClip) return;
-      const deltaX = e.clientX - trimmingClip.initialX;
-      let deltaSecs = deltaX / zoomLevel;
-
-      commitHistory();
-
-      setTracks((prev) => {
-        return prev.map((track) => {
-          if (track.isLocked) return track;
-
-          if (track.id === trimmingClip.trackId) {
-            const newItems = [...track.items];
-            const target = newItems[trimmingClip.itemIdx];
-            if (!target) return track;
-
-            if (trimmingClip.edge === "right") {
-              const rawDur = Math.max(0.2, trimmingClip.initialDuration + deltaSecs);
-              newItems[trimmingClip.itemIdx] = { ...target, duration: rawDur };
-            } else {
-              const clampedDelta = Math.min(trimmingClip.initialDuration - 0.2, deltaSecs);
-              const newStart = Math.max(0, trimmingClip.initialStart + clampedDelta);
-              const newDur = trimmingClip.initialDuration - clampedDelta;
-              const newTrimIn = (trimmingClip.initialTrimIn || 0) + clampedDelta;
-              newItems[trimmingClip.itemIdx] = {
-                ...target,
-                start: newStart,
-                duration: newDur,
-                trimIn: Math.max(0, newTrimIn),
-              };
-            }
-            return { ...track, items: newItems };
-          }
-
-          if (trimmingClip.linkedClipId) {
-            const linkedIdx = track.items.findIndex((i) => i.id === trimmingClip.linkedClipId);
-            if (linkedIdx !== -1 && !track.isLocked) {
-              const newItems = [...track.items];
-              const linkedTarget = newItems[linkedIdx];
-
-              if (trimmingClip.edge === "right") {
-                const rawDur = Math.max(0.2, trimmingClip.initialDuration + deltaSecs);
-                newItems[linkedIdx] = { ...linkedTarget, duration: rawDur };
-              } else {
-                const clampedDelta = Math.min(trimmingClip.initialDuration - 0.2, deltaSecs);
-                const newStart = Math.max(0, trimmingClip.initialStart + clampedDelta);
-                const newDur = trimmingClip.initialDuration - clampedDelta;
-                const newTrimIn = (trimmingClip.initialTrimIn || 0) + clampedDelta;
-                newItems[linkedIdx] = {
-                  ...linkedTarget,
-                  start: newStart,
-                  duration: newDur,
-                  trimIn: Math.max(0, newTrimIn),
-                };
-              }
-              return { ...track, items: newItems };
-            }
-          }
-
-          return track;
-        });
-      });
+    (_e: React.PointerEvent) => {
+      // Intentionally left empty. For a Rust-first engine,
+      // we only submit the trim on pointer up to avoid 60fps IPC serialization lag.
+      // A local preview override could be implemented here using a local React state.
     },
-    [trimmingClip, zoomLevel, setTracks]
+    []
   );
 
   const handleTrimEnd = useCallback(
-    (e: React.PointerEvent) => {
+    async (e: React.PointerEvent) => {
       if (trimmingClip) {
         try {
           (e.target as HTMLElement).releasePointerCapture(e.pointerId);
         } catch {}
+
+        const deltaX = e.clientX - trimmingClip.initialX;
+        const deltaSecs = deltaX / zoomLevel;
+
+        try {
+          await invoke("trim_clip_cmd", {
+            clipId: tracks.find(t => t.id === trimmingClip.trackId)?.items[trimmingClip.itemIdx]?.id,
+            edge: trimmingClip.edge,
+            deltaSecs,
+            linkedSelection,
+          });
+          await fetchState();
+        } catch (err) {
+          console.error("Failed to trim clip:", err);
+        }
+
         setTrimmingClip(null);
         setSnapGuideTime(null);
       }
     },
-    [trimmingClip]
+    [trimmingClip, zoomLevel, tracks, linkedSelection, fetchState]
   );
 
   // 2D Dragging Movement WITH PREMIERE PRO MAGNET SNAPPING!
@@ -506,7 +330,7 @@ export function Timeline() {
 
   // 2D Drag Drop Finalization
   const handleClipPointerUp = useCallback(
-    (e: React.PointerEvent) => {
+    async (e: React.PointerEvent) => {
       if (trimmingClip) {
         handleTrimEnd(e);
         return;
@@ -521,83 +345,37 @@ export function Timeline() {
         const newStart = Math.max(0, draggingClip.initialStart + deltaSecs);
         const finalDestTrackId = targetTrackId || draggingClip.trackId;
 
-        setTracks((prev) => {
-          let movingItem: DragItem | null = null;
-          const updatedTracks = prev.map((track) => {
-            if (track.id === draggingClip.trackId) {
-              const item = track.items[draggingClip.itemIdx];
-              if (item) {
-                movingItem = { ...item, start: newStart };
-              }
-              if (finalDestTrackId !== draggingClip.trackId) {
-                return {
-                  ...track,
-                  items: track.items.filter((_, idx) => idx !== draggingClip.itemIdx),
-                };
-              } else {
-                const trackWithoutItem = {
-                  ...track,
-                  items: track.items.filter((_, idx) => idx !== draggingClip.itemIdx),
-                };
-                return overwriteClip(trackWithoutItem, movingItem!);
+        // Locate the moving item
+        const track = tracks.find(t => t.id === draggingClip.trackId);
+        const item = track?.items[draggingClip.itemIdx];
+
+        if (item) {
+          const movingItem = { ...item, start: newStart };
+          let audioClip: DragItem | undefined = undefined;
+
+          // If linked selection is on, find the linked clip and move it too
+          if (linkedSelection && item.linkedClipId) {
+            for (const t of tracks) {
+              if (t.isLocked) continue;
+              const linked = t.items.find(i => i.id === item.linkedClipId);
+              if (linked) {
+                audioClip = { ...linked, start: Math.max(0, (linked.start || 0) + deltaSecs) };
+                break;
               }
             }
-            return track;
-          });
-
-          if (!movingItem) return prev;
-
-          let result = updatedTracks;
-
-          if (finalDestTrackId === "NEW_VIDEO_TRACK") {
-            const vTracksCount = updatedTracks.filter((t) => t.type === "video").length;
-            const newTrack: Track = {
-              id: `V${vTracksCount + 1}`,
-              name: `V${vTracksCount + 1}`,
-              type: "video",
-              items: [movingItem],
-              isLocked: false,
-              isMuted: false,
-            };
-            result = [newTrack, ...updatedTracks];
-          } else if (finalDestTrackId === "NEW_AUDIO_TRACK") {
-            const aTracksCount = updatedTracks.filter((t) => t.type === "audio").length;
-            const newTrack: Track = {
-              id: `A${aTracksCount + 1}`,
-              name: `A${aTracksCount + 1}`,
-              type: "audio",
-              items: [movingItem],
-              isLocked: false,
-              isMuted: false,
-            };
-            result = [...updatedTracks, newTrack];
-          } else if (finalDestTrackId !== draggingClip.trackId) {
-            result = updatedTracks.map((track) => {
-              if (track.id === finalDestTrackId) {
-                return overwriteClip(track, movingItem!);
-              }
-              return track;
-            });
           }
 
-          // SYNC LINKED CLIP: ONLY if linkedSelection is ON AND the linked track is NOT locked!
-          if (linkedSelection && draggingClip.linkedClipId) {
-            result = result.map((track) => {
-              if (track.isLocked) return track;
-
-              return {
-                ...track,
-                items: track.items.map((item) =>
-                  item.id === draggingClip.linkedClipId
-                    ? { ...item, start: Math.max(0, (item.start || 0) + deltaSecs) }
-                    : item
-                ),
-              };
+          try {
+            await invoke("drop_clip_to_timeline", {
+              trackId: finalDestTrackId,
+              videoClip: movingItem,
+              audioClip: audioClip || null
             });
+            await fetchState();
+          } catch (err) {
+            console.error("Failed to move clip:", err);
           }
-
-          return result;
-        });
+        }
 
         setDraggingClip(null);
         setDragOffset(0);
@@ -605,7 +383,7 @@ export function Timeline() {
         setSnapGuideTime(null);
       }
     },
-    [draggingClip, trimmingClip, handleTrimEnd, dragOffset, zoomLevel, targetTrackId, linkedSelection, setTracks]
+    [draggingClip, trimmingClip, handleTrimEnd, dragOffset, zoomLevel, targetTrackId, linkedSelection, tracks, fetchState]
   );
 
   // Ruler scrubbing handler

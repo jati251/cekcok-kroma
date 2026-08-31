@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { invoke } from "@tauri-apps/api/core";
 import { DragItem, Track, Tool, DragCursorPosition } from "../types/editor";
 import { DEFAULT_TRACKS, ZOOM_LIMITS, DEFAULT_FPS } from "../constants/editor";
 import { formatTimecode } from "../utils/timecode";
@@ -18,12 +19,10 @@ interface EditorStore {
   setProjectFilePath: (path: string | null) => void;
   loadDocumentState: (state: DocumentState) => void;
 
-  // History (Undo/Redo)
-  past: DocumentState[];
-  future: DocumentState[];
-  commitHistory: () => void;
-  undo: () => void;
-  redo: () => void;
+  // Rust Backend synchronization
+  fetchState: () => Promise<void>;
+  undo: () => Promise<void>;
+  redo: () => Promise<void>;
 
   // Drag state
   draggedItem: DragItem | null;
@@ -56,10 +55,9 @@ interface EditorStore {
   isSnapping: boolean;
   toggleSnapping: () => void;
 
-  // Clip Selection & Editing
   selectedClipId: string | null;
   setSelectedClipId: (id: string | null) => void;
-  deleteSelectedClip: () => void;
+  deleteSelectedClip: () => Promise<void>;
 
   // Playback state
   isPlaying: boolean;
@@ -77,7 +75,7 @@ interface EditorStore {
 
   // Media Bin Items
   mediaItems: DragItem[];
-  addMediaItem: (item: DragItem) => void;
+  addMediaItem: (item: DragItem) => Promise<void>;
 }
 
 export const useEditorStore = create<EditorStore>((set, get) => ({
@@ -86,66 +84,42 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   loadDocumentState: (docState) => set({
     tracks: docState.tracks,
     mediaItems: docState.mediaItems,
-    past: [],
-    future: [],
     selectedClipId: null,
   }),
 
-  past: [],
-  future: [],
-  commitHistory: () => {
-    const state = get();
-    // Save current document state to past
-    const currentDocState: DocumentState = {
-      tracks: JSON.parse(JSON.stringify(state.tracks)), // deep clone
-      mediaItems: JSON.parse(JSON.stringify(state.mediaItems)),
-    };
-    
-    // limit history size to 50
-    const newPast = [...state.past, currentDocState].slice(-50);
-    set({ past: newPast, future: [] });
-  },
-  
-  undo: () => {
-    const state = get();
-    if (state.past.length === 0) return;
-    
-    const previous = state.past[state.past.length - 1];
-    const newPast = state.past.slice(0, state.past.length - 1);
-    
-    const currentDocState: DocumentState = {
-      tracks: state.tracks,
-      mediaItems: state.mediaItems,
-    };
-    
-    set({
-      tracks: previous.tracks,
-      mediaItems: previous.mediaItems,
-      past: newPast,
-      future: [currentDocState, ...state.future],
-      selectedClipId: null,
-    });
+  fetchState: async () => {
+    try {
+      const docState: DocumentState = await invoke("get_state");
+      set({ tracks: docState.tracks, mediaItems: docState.mediaItems });
+    } catch (e) {
+      console.error("Failed to fetch state from Rust:", e);
+    }
   },
 
-  redo: () => {
-    const state = get();
-    if (state.future.length === 0) return;
-    
-    const next = state.future[0];
-    const newFuture = state.future.slice(1);
-    
-    const currentDocState: DocumentState = {
-      tracks: state.tracks,
-      mediaItems: state.mediaItems,
-    };
-    
-    set({
-      tracks: next.tracks,
-      mediaItems: next.mediaItems,
-      past: [...state.past, currentDocState],
-      future: newFuture,
-      selectedClipId: null,
-    });
+  undo: async () => {
+    try {
+      const prev: DocumentState = await invoke("undo_action_cmd");
+      set({
+        tracks: prev.tracks,
+        mediaItems: prev.mediaItems,
+        selectedClipId: null,
+      });
+    } catch (e) {
+      console.error("Failed to undo:", e);
+    }
+  },
+
+  redo: async () => {
+    try {
+      const next: DocumentState = await invoke("redo_action_cmd");
+      set({
+        tracks: next.tracks,
+        mediaItems: next.mediaItems,
+        selectedClipId: null,
+      });
+    } catch (e) {
+      console.error("Failed to redo:", e);
+    }
   },
 
   draggedItem: null,
@@ -183,33 +157,22 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   selectedClipId: null,
   setSelectedClipId: (id) => set({ selectedClipId: id }),
 
-  deleteSelectedClip: () => {
+  deleteSelectedClip: async () => {
     const state = get();
     if (!state.selectedClipId) return;
 
-    state.commitHistory();
-
-    // If linkedSelection is ON, find and delete linked audio/video as well
-    let linkedId: string | undefined;
-    if (state.linkedSelection) {
-      for (const t of state.tracks) {
-        const found = t.items.find((item) => item.id === state.selectedClipId);
-        if (found) {
-          linkedId = found.linkedClipId;
-          break;
-        }
-      }
+    try {
+      const newDoc: DocumentState = await invoke("delete_clip", {
+        clipId: state.selectedClipId,
+        linkedSelection: state.linkedSelection
+      });
+      set({
+        tracks: newDoc.tracks,
+        selectedClipId: null
+      });
+    } catch (e) {
+      console.error("Failed to delete clip:", e);
     }
-
-    state.setTracks((prev) =>
-      prev.map((t) => ({
-        ...t,
-        items: t.items.filter(
-          (item) => item.id !== state.selectedClipId && (!linkedId || item.id !== linkedId)
-        ),
-      }))
-    );
-    set({ selectedClipId: null });
   },
 
   isPlaying: false,
@@ -239,8 +202,12 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   },
 
   mediaItems: [],
-  addMediaItem: (item) => {
-    get().commitHistory();
-    set((state) => ({ mediaItems: [...state.mediaItems, item] }));
+  addMediaItem: async (item) => {
+    try {
+      const newDoc: DocumentState = await invoke("add_media_to_bin", { item });
+      set({ mediaItems: newDoc.mediaItems });
+    } catch (e) {
+      console.error("Failed to add media to bin:", e);
+    }
   },
 }));

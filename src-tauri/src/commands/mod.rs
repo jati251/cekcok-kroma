@@ -1,4 +1,7 @@
 use std::process::Command;
+use tauri::State;
+use crate::state::{AppState, DocumentState, DragItem, Track};
+use crate::engine::overwrite::overwrite_clip;
 
 #[tauri::command]
 pub fn greet(name: &str) -> String {
@@ -176,4 +179,253 @@ pub fn save_project(path: &str, data: &str) -> Result<(), String> {
 #[tauri::command]
 pub fn load_project(path: &str) -> Result<String, String> {
     std::fs::read_to_string(path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn get_state(state: State<'_, AppState>) -> Result<DocumentState, String> {
+    let doc = state.state.lock().map_err(|e| e.to_string())?;
+    Ok(doc.clone())
+}
+
+#[tauri::command]
+pub fn add_media_to_bin(item: DragItem, state: State<'_, AppState>) -> Result<DocumentState, String> {
+    state.commit_history();
+    let mut doc = state.state.lock().map_err(|e| e.to_string())?;
+    doc.media_items.push(item);
+    Ok(doc.clone())
+}
+
+#[tauri::command]
+pub fn drop_clip_to_timeline(
+    track_id: String,
+    video_clip: DragItem,
+    audio_clip: Option<DragItem>,
+    state: State<'_, AppState>
+) -> Result<DocumentState, String> {
+    state.commit_history();
+    
+    let mut doc = state.state.lock().map_err(|e| e.to_string())?;
+
+    // Pre-clean: Remove the incoming clip IDs from anywhere they currently exist (for move/drag operations)
+    let mut remove_ids = vec![video_clip.id.clone()];
+    if let Some(ac) = &audio_clip {
+        remove_ids.push(ac.id.clone());
+    }
+    
+    for track in &mut doc.tracks {
+        track.items.retain(|item| !remove_ids.contains(&item.id));
+    }
+    
+    // Auto-Routing logic for NEW_VIDEO_TRACK and NEW_AUDIO_TRACK
+    if track_id == "NEW_VIDEO_TRACK" {
+        let v_count = doc.tracks.iter().filter(|t| t.r#type == "video").count();
+        let new_track = Track {
+            id: format!("V{}", v_count + 1),
+            name: format!("V{}", v_count + 1),
+            r#type: "video".to_string(),
+            items: vec![video_clip.clone()],
+            is_locked: Some(false),
+            is_muted: Some(false),
+        };
+        doc.tracks.insert(0, new_track);
+    } else if track_id == "NEW_AUDIO_TRACK" {
+        let a_count = doc.tracks.iter().filter(|t| t.r#type == "audio").count();
+        if let Some(ac) = &audio_clip {
+            let new_track = Track {
+                id: format!("A{}", a_count + 1),
+                name: format!("A{}", a_count + 1),
+                r#type: "audio".to_string(),
+                items: vec![ac.clone()],
+                is_locked: Some(false),
+                is_muted: Some(false),
+            };
+            doc.tracks.push(new_track);
+        }
+    } else {
+        // Standard drop with overwrite
+        let mut audio_target_id = track_id.clone();
+        if track_id.starts_with('v') || track_id.starts_with('V') {
+            audio_target_id = track_id.replace('v', "a").replace('V', "A");
+        }
+
+        let has_audio_target = doc.tracks.iter().any(|t| t.id == audio_target_id);
+        
+        if !has_audio_target && (track_id.starts_with('v') || track_id.starts_with('V')) {
+            doc.tracks.push(Track {
+                id: audio_target_id.clone(),
+                name: audio_target_id.to_uppercase(),
+                r#type: "audio".to_string(),
+                items: vec![],
+                is_locked: Some(false),
+                is_muted: Some(false),
+            });
+        }
+
+        let mut next_tracks = Vec::new();
+        for mut track in doc.tracks.drain(..) {
+            if track.id == track_id && track.is_locked != Some(true) {
+                if track.r#type == "video" {
+                    track = overwrite_clip(track, video_clip.clone());
+                } else if track.r#type == "audio" {
+                    if let Some(ac) = &audio_clip {
+                        track = overwrite_clip(track, ac.clone());
+                    } else {
+                        track = overwrite_clip(track, video_clip.clone());
+                    }
+                }
+            }
+            if track.id == audio_target_id && (track_id.starts_with('v') || track_id.starts_with('V')) && track.is_locked != Some(true) {
+                if let Some(ac) = &audio_clip {
+                    track = overwrite_clip(track, ac.clone());
+                }
+            }
+            next_tracks.push(track);
+        }
+        doc.tracks = next_tracks;
+    }
+
+    Ok(doc.clone())
+}
+
+#[tauri::command]
+pub fn delete_clip(clip_id: String, linked_selection: bool, state: State<'_, AppState>) -> Result<DocumentState, String> {
+    state.commit_history();
+    let mut doc = state.state.lock().map_err(|e| e.to_string())?;
+
+    // First find the linked clip ID if linked selection is on
+    let mut target_ids = vec![clip_id.clone()];
+    
+    if linked_selection {
+        for track in &doc.tracks {
+            if let Some(item) = track.items.iter().find(|i| i.id == clip_id) {
+                if let Some(linked) = &item.linked_clip_id {
+                    target_ids.push(linked.clone());
+                }
+                break;
+            }
+        }
+    }
+
+    for track in &mut doc.tracks {
+        if track.is_locked != Some(true) {
+            track.items.retain(|item| !target_ids.contains(&item.id));
+        }
+    }
+
+    Ok(doc.clone())
+}
+
+#[tauri::command]
+pub fn undo_action_cmd(state: State<'_, AppState>) -> Result<DocumentState, String> {
+    if let Some(prev) = state.undo() {
+        Ok(prev)
+    } else {
+        let doc = state.state.lock().unwrap();
+        Ok(doc.clone())
+    }
+}
+
+#[tauri::command]
+pub fn redo_action_cmd(state: State<'_, AppState>) -> Result<DocumentState, String> {
+    if let Some(next) = state.redo() {
+        Ok(next)
+    } else {
+        let doc = state.state.lock().unwrap();
+        Ok(doc.clone())
+    }
+}
+
+#[tauri::command]
+pub fn split_clip_cmd(
+    clip_id: String,
+    timestamp: f64,
+    linked_selection: bool,
+    state: State<'_, AppState>
+) -> Result<DocumentState, String> {
+    state.commit_history();
+    let mut doc = state.state.lock().map_err(|e| e.to_string())?;
+
+    let cut_time_str = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis().to_string();
+
+    for track in &mut doc.tracks {
+        if track.is_locked == Some(true) { continue; }
+
+        let mut i = 0;
+        while i < track.items.len() {
+            let item = &track.items[i];
+            let start = item.start.unwrap_or(0.0);
+            let dur = item.duration.unwrap_or(5.0);
+
+            // Is the timestamp inside this clip?
+            let is_target = item.id == clip_id || (linked_selection && item.linked_clip_id.as_ref() == Some(&clip_id));
+
+            if is_target && timestamp > start + 0.05 && timestamp < start + dur - 0.05 {
+                let dur_a = timestamp - start;
+                let dur_b = dur - dur_a;
+
+                let mut clip_a = item.clone();
+                clip_a.id = format!("{}-a1-{}", item.id, cut_time_str);
+                clip_a.duration = Some(dur_a);
+
+                let mut clip_b = item.clone();
+                clip_b.id = format!("{}-b1-{}", item.id, cut_time_str);
+                clip_b.start = Some(timestamp);
+                clip_b.duration = Some(dur_b);
+                clip_b.trim_in = Some(item.trim_in.unwrap_or(0.0) + dur_a);
+
+                if let Some(linked) = &item.linked_clip_id {
+                    clip_a.linked_clip_id = Some(format!("{}-a1-{}", linked, cut_time_str));
+                    clip_b.linked_clip_id = Some(format!("{}-b1-{}", linked, cut_time_str));
+                }
+
+                track.items[i] = clip_a;
+                track.items.insert(i + 1, clip_b);
+                i += 1; // skip the newly inserted clip
+            }
+            i += 1;
+        }
+    }
+
+    Ok(doc.clone())
+}
+
+#[tauri::command]
+pub fn trim_clip_cmd(
+    clip_id: String,
+    edge: String,
+    delta_secs: f64,
+    linked_selection: bool,
+    state: State<'_, AppState>
+) -> Result<DocumentState, String> {
+    state.commit_history();
+    let mut doc = state.state.lock().map_err(|e| e.to_string())?;
+
+    for track in &mut doc.tracks {
+        if track.is_locked == Some(true) { continue; }
+
+        for item in &mut track.items {
+            let is_target = item.id == clip_id || (linked_selection && item.linked_clip_id.as_ref() == Some(&clip_id));
+            if is_target {
+                let initial_dur = item.duration.unwrap_or(5.0);
+                let initial_start = item.start.unwrap_or(0.0);
+                let initial_trim_in = item.trim_in.unwrap_or(0.0);
+
+                if edge == "right" {
+                    let raw_dur = (initial_dur + delta_secs).max(0.2);
+                    item.duration = Some(raw_dur);
+                } else {
+                    let clamped_delta = delta_secs.min(initial_dur - 0.2);
+                    let new_start = (initial_start + clamped_delta).max(0.0);
+                    let new_dur = initial_dur - clamped_delta;
+                    let new_trim_in = (initial_trim_in + clamped_delta).max(0.0);
+
+                    item.start = Some(new_start);
+                    item.duration = Some(new_dur);
+                    item.trim_in = Some(new_trim_in);
+                }
+            }
+        }
+    }
+
+    Ok(doc.clone())
 }
