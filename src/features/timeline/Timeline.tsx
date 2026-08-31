@@ -59,7 +59,8 @@ export function Timeline() {
   const [timelineWidth, setTimelineWidth] = useState(1000);
 
   // Custom dragging state for native pointer events!
-  const [draggingClip, setDraggingClip] = useState<{trackId: string, itemIdx: number, initialX: number, initialStart: number} | null>(null);
+  const [draggingClip, setDraggingClip] = useState<{ trackId: string; itemIdx: number; initialX: number; initialStart: number } | null>(null);
+  const [dragOffset, setDragOffset] = useState<number>(0);
 
   useEffect(() => {
     if (timelineRef.current) {
@@ -104,6 +105,7 @@ export function Timeline() {
     if (activeTool === "selection") {
       setSelectedClipId(item.id);
       (e.target as HTMLElement).setPointerCapture(e.pointerId);
+      setDragOffset(0);
       setDraggingClip({
         trackId,
         itemIdx,
@@ -143,27 +145,30 @@ export function Timeline() {
 
   const handleClipPointerMove = useCallback((e: React.PointerEvent) => {
     if (!draggingClip) return;
-    
     const deltaX = e.clientX - draggingClip.initialX;
-    const deltaSecs = deltaX / zoomLevel;
-    const newStart = Math.max(0, draggingClip.initialStart + deltaSecs);
-
-    setTracks(prev => prev.map(t => {
-      if (t.id === draggingClip.trackId) {
-        const newItems = [...t.items];
-        newItems[draggingClip.itemIdx] = { ...newItems[draggingClip.itemIdx], start: newStart };
-        return { ...t, items: newItems };
-      }
-      return t;
-    }));
-  }, [draggingClip, zoomLevel, setTracks]);
+    setDragOffset(deltaX);
+  }, [draggingClip]);
 
   const handleClipPointerUp = useCallback((e: React.PointerEvent) => {
     if (draggingClip) {
       (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+      
+      const deltaSecs = dragOffset / zoomLevel;
+      const newStart = Math.max(0, draggingClip.initialStart + deltaSecs);
+
+      setTracks(prev => prev.map(t => {
+        if (t.id === draggingClip.trackId) {
+          const newItems = [...t.items];
+          newItems[draggingClip.itemIdx] = { ...newItems[draggingClip.itemIdx], start: newStart };
+          return { ...t, items: newItems };
+        }
+        return t;
+      }));
+      
       setDraggingClip(null);
+      setDragOffset(0);
     }
-  }, [draggingClip]);
+  }, [draggingClip, dragOffset, zoomLevel, setTracks]);
 
   const handleTimelineClick = (e: React.MouseEvent) => {
     if (timelineRef.current) {
@@ -237,6 +242,7 @@ export function Timeline() {
                         onPointerDown={(e) => handleClipPointerDown(e, track.id, idx, item)}
                         onPointerMove={handleClipPointerMove}
                         onPointerUp={handleClipPointerUp}
+                        onPointerCancel={handleClipPointerUp}
                         className={`absolute h-[34px] top-[4px] flex items-center px-1 shadow-sm border overflow-hidden ${
                           selectedClipId === item.id ? "border-white z-20" : "border-[#111] z-10"
                         } ${activeTool === "razor" ? "cursor-crosshair bg-red-800/80" : "cursor-pointer hover:border-[#aaa]"}`}
@@ -247,7 +253,8 @@ export function Timeline() {
                           backgroundImage: thumbUrl ? `url(${thumbUrl})` : 'none',
                           backgroundSize: 'cover',
                           backgroundPosition: 'left center',
-                          color: "white"
+                          color: "white",
+                          transform: draggingClip?.trackId === track.id && draggingClip?.itemIdx === idx ? `translateX(${dragOffset}px)` : 'none'
                         }}
                       >
                         <div className="absolute inset-0 bg-black/40 pointer-events-none" />

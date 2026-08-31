@@ -7,7 +7,7 @@ export function Toolbar() {
   return (
     <div className="w-10 bg-[var(--panel-bg)] border border-[var(--panel-border)] flex flex-col items-center py-2 gap-2 shrink-0">
       <button 
-        className={`w-6 h-6 rounded flex items-center justify-center ${activeTool === "selection" ? "bg-accent text-white" : "text-[#888] hover:bg-[#333]"}`}
+        className={`w-6 h-6 rounded flex items-center justify-center cursor-pointer ${activeTool === "selection" ? "bg-accent text-white" : "text-[#888] hover:bg-[#333]"}`}
         onClick={() => setActiveTool("selection")}
         title="Selection Tool (V)"
       >
@@ -18,7 +18,7 @@ export function Toolbar() {
       </button>
       
       <button 
-        className={`w-6 h-6 rounded flex items-center justify-center ${activeTool === "razor" ? "bg-accent text-white" : "text-[#888] hover:bg-[#333]"}`}
+        className={`w-6 h-6 rounded flex items-center justify-center cursor-pointer ${activeTool === "razor" ? "bg-accent text-white" : "text-[#888] hover:bg-[#333]"}`}
         onClick={() => setActiveTool("razor")}
         title="Razor Tool (C)"
       >
@@ -30,7 +30,7 @@ export function Toolbar() {
       </button>
 
       <button 
-        className={`w-6 h-6 rounded flex items-center justify-center ${activeTool === "hand" ? "bg-accent text-white" : "text-[#888] hover:bg-[#333]"}`}
+        className={`w-6 h-6 rounded flex items-center justify-center cursor-pointer ${activeTool === "hand" ? "bg-accent text-white" : "text-[#888] hover:bg-[#333]"}`}
         onClick={() => setActiveTool("hand")}
         title="Hand Tool (H)"
       >

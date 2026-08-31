@@ -14,9 +14,7 @@
       {
         "title": "Cekcok Kroma",
         "width": 1280,
-        "height": 800,
-        "hiddenTitle": true,
-        "titleBarStyle": "Overlay"
+        "height": 800
       }
     ],
     "security": {

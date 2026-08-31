@@ -79,14 +79,21 @@ export function ProgramMonitor() {
       </div>
       
       <div className="flex-1 p-2 flex flex-col relative bg-[#111]">
-        <div className="flex-1 flex items-center justify-center overflow-hidden">
+        <div className="flex-1 flex items-center justify-center overflow-hidden bg-black">
           {activeVideoSrc ? (
             <video 
               ref={videoRef}
               src={activeVideoSrc}
               className="w-full h-full object-contain"
               preload="auto"
+              playsInline
               onEnded={() => setIsPlaying(false)}
+              onLoadedMetadata={() => {
+                // Ensure video is ready before applying current time
+                if (!isPlaying && videoRef.current) {
+                  videoRef.current.currentTime = playheadPosition;
+                }
+              }}
             />
           ) : (
             <span className="text-[#555] font-mono">Media Offline</span>

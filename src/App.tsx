@@ -49,34 +49,11 @@ function App() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [setActiveTool, setIsPlaying, deleteSelectedClip, setZoomLevel]);
-
-  // NOTE: Playback Loop has been moved to ProgramMonitor.tsx
-  // This is because the best way to get zero lag is to let the <video> play natively
-  // and sync the playhead to its currentTime, rather than manually advancing the playhead via RequestAnimationFrame here.
+  }, [setActiveTool, deleteSelectedClip]);
 
   return (
-    <div className="flex flex-col h-screen overflow-hidden bg-background text-foreground text-[11px] font-sans selection:bg-accent/30">
-      {/* Header (Mac OS Overlay style) */}
-      <header 
-        data-tauri-drag-region 
-        className="flex items-center justify-between px-2 pl-[72px] h-7 border-b border-[var(--panel-border)] bg-[var(--panel-bg)] shrink-0 select-none"
-      >
-        <div className="flex items-center gap-3 pointer-events-none">
-          <div className="w-3 h-3 bg-[#c975ff] rounded-sm ml-1" />
-          <div className="flex gap-3 text-[#cccccc] text-[11px] pointer-events-auto">
-            <button className="hover:bg-[#444] px-1.5 py-0.5 rounded cursor-default">File</button>
-            <button className="hover:bg-[#444] px-1.5 py-0.5 rounded cursor-default">Edit</button>
-            <button className="hover:bg-[#444] px-1.5 py-0.5 rounded cursor-default">Clip</button>
-            <button className="hover:bg-[#444] px-1.5 py-0.5 rounded cursor-default">Sequence</button>
-            <button className="hover:bg-[#444] px-1.5 py-0.5 rounded cursor-default">Markers</button>
-            <button className="hover:bg-[#444] px-1.5 py-0.5 rounded cursor-default">Graphics</button>
-            <button className="hover:bg-[#444] px-1.5 py-0.5 rounded cursor-default">View</button>
-            <button className="hover:bg-[#444] px-1.5 py-0.5 rounded cursor-default">Window</button>
-            <button className="hover:bg-[#444] px-1.5 py-0.5 rounded cursor-default">Help</button>
-          </div>
-        </div>
-      </header>
+    <div className="flex flex-col h-screen overflow-hidden bg-background text-foreground text-[11px] font-sans">
+
 
       {/* Main Workspace */}
       <div className="flex flex-1 overflow-hidden p-0.5 gap-0.5 bg-[#141414]">

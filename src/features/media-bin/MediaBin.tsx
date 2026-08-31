@@ -46,7 +46,7 @@ export function MediaBin() {
         <span className="text-[11px] text-[#ccc]">Project Media</span>
         <button 
           onClick={handleImport}
-          className="text-[10px] text-accent hover:text-white transition-colors"
+          className="text-[10px] text-accent hover:text-white transition-colors cursor-pointer"
         >
           Import
         </button>
