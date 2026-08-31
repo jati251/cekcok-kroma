@@ -63,7 +63,7 @@ export function TimelineClip({
         backgroundSize: "cover",
         backgroundPosition: "left center",
         color: "white",
-        transform: isBeingDragged ? `translateX(${dragOffset}px)` : "none",
+        transform: isBeingDragged && !isTrackLocked ? `translateX(${dragOffset}px)` : "none",
       }}
     >
       {/* Dim Overlay */}

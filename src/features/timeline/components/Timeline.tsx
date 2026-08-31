@@ -28,6 +28,9 @@ export function Timeline() {
   const timelineRef = useRef<HTMLDivElement>(null);
   const [timelineWidth, setTimelineWidth] = useState(1000);
 
+  // Razor Tool Cursor Position
+  const [razorHoverTime, setRazorHoverTime] = useState<number | null>(null);
+
   // 2D Dragging state for clips
   const [draggingClip, setDraggingClip] = useState<{
     trackId: string;
@@ -66,7 +69,7 @@ export function Timeline() {
     return () => window.removeEventListener("resize", handleResize);
   }, []);
 
-  // Drop media from MediaBin at mouse X timestamp + AUTOMATIC LINKED AUDIO TRACK SPAWN
+  // Drop media from MediaBin at mouse X timestamp
   const handlePointerUpBinDrop = (e: React.PointerEvent, trackId: string) => {
     const targetTrack = tracks.find((t) => t.id === trackId);
     if (targetTrack?.isLocked) return;
@@ -109,13 +112,13 @@ export function Timeline() {
 
       setTracks((prev) =>
         prev.map((track) => {
-          if (track.id === trackId) {
+          if (track.id === trackId && !track.isLocked) {
             return {
               ...track,
               items: [...track.items, videoClip],
             };
           }
-          if (track.id === "a1" && trackId.startsWith("v") && draggedItem.hasAudio !== false) {
+          if (track.id === "a1" && trackId.startsWith("v") && draggedItem.hasAudio !== false && !track.isLocked) {
             return {
               ...track,
               items: [...track.items, audioClip],
@@ -130,7 +133,7 @@ export function Timeline() {
     }
   };
 
-  // Start 2D dragging a clip or razor cut
+  // Start 2D dragging a clip OR Cut at Mouse Position with Razor tool
   const handleClipPointerDown = (
     e: React.PointerEvent,
     trackId: string,
@@ -155,29 +158,37 @@ export function Timeline() {
         linkedClipId: linkedSelection ? item.linkedClipId : undefined,
       });
     } else if (activeTool === "razor") {
-      // PROPER RAZOR CUT CROSS-LINKING
+      // CUT AT EXACT MOUSE CLICK POSITION (NOT Playhead!)
+      let clickTime = playheadPosition;
+      if (timelineRef.current) {
+        const rect = timelineRef.current.getBoundingClientRect();
+        const scrollLeft = timelineRef.current.scrollLeft;
+        const mouseX = e.clientX - rect.left + scrollLeft - 64;
+        clickTime = Math.max(0, mouseX / zoomLevel);
+      }
+
+      const start = item.start || 0;
+      const dur = item.duration || 0;
+
+      // Validate click is inside clip
+      if (clickTime <= start + 0.05 || clickTime >= start + dur - 0.05) {
+        return;
+      }
+
       const cutTime = Date.now();
       const videoA_id = `${item.id}-a1-${cutTime}`;
       const videoB_id = `${item.id}-b1-${cutTime}`;
       const audioA_id = item.linkedClipId ? `${item.linkedClipId}-a2-${cutTime}` : undefined;
       const audioB_id = item.linkedClipId ? `${item.linkedClipId}-b2-${cutTime}` : undefined;
 
+      const durA = clickTime - start;
+      const durB = dur - durA;
+
       setTracks((prev) => {
         let nextTracks = prev.map((t) => {
-          if (t.id === trackId) {
+          if (t.id === trackId && !t.isLocked) {
             const newItems = [...t.items];
             const target = newItems[itemIdx];
-
-            let splitPos = playheadPosition;
-            const start = target.start || 0;
-            const dur = target.duration || 0;
-
-            if (splitPos <= start || splitPos >= start + dur) {
-              splitPos = start + dur / 2;
-            }
-
-            const durA = splitPos - start;
-            const durB = dur - durA;
 
             const clipA: DragItem = {
               ...target,
@@ -189,7 +200,7 @@ export function Timeline() {
               ...target,
               id: videoB_id,
               linkedClipId: audioB_id,
-              start: splitPos,
+              start: clickTime,
               duration: durB,
               trimIn: (target.trimIn || 0) + durA,
             };
@@ -200,24 +211,14 @@ export function Timeline() {
           return t;
         });
 
-        // Also cut linked audio clip and cross-link them together
+        // Also cut linked clip if its track is NOT locked
         if (linkedSelection && item.linkedClipId && audioA_id && audioB_id) {
           nextTracks = nextTracks.map((t) => {
+            if (t.isLocked) return t; // Protected if locked!
             const linkedIdx = t.items.findIndex((i) => i.id === item.linkedClipId);
             if (linkedIdx !== -1) {
               const newItems = [...t.items];
               const linkedTarget = newItems[linkedIdx];
-
-              let splitPos = playheadPosition;
-              const start = linkedTarget.start || 0;
-              const dur = linkedTarget.duration || 0;
-
-              if (splitPos <= start || splitPos >= start + dur) {
-                splitPos = start + dur / 2;
-              }
-
-              const durA = splitPos - start;
-              const durB = dur - durA;
 
               const linkedA: DragItem = {
                 ...linkedTarget,
@@ -229,7 +230,7 @@ export function Timeline() {
                 ...linkedTarget,
                 id: audioB_id,
                 linkedClipId: videoB_id,
-                start: splitPos,
+                start: clickTime,
                 duration: durB,
                 trimIn: (linkedTarget.trimIn || 0) + durA,
               };
@@ -280,6 +281,8 @@ export function Timeline() {
 
       setTracks((prev) => {
         return prev.map((track) => {
+          if (track.isLocked) return track;
+
           // Update main trimming clip
           if (track.id === trimmingClip.trackId) {
             const newItems = [...track.items];
@@ -304,10 +307,10 @@ export function Timeline() {
             return { ...track, items: newItems };
           }
 
-          // If linked selection is ON, trim linked partner simultaneously!
+          // If linked selection is ON and linked track is NOT locked, trim linked partner simultaneously
           if (trimmingClip.linkedClipId) {
             const linkedIdx = track.items.findIndex((i) => i.id === trimmingClip.linkedClipId);
-            if (linkedIdx !== -1) {
+            if (linkedIdx !== -1 && !track.isLocked) {
               const newItems = [...track.items];
               const linkedTarget = newItems[linkedIdx];
 
@@ -349,7 +352,7 @@ export function Timeline() {
     [trimmingClip]
   );
 
-  // 2D Dragging Movement (Horizontal Delta + Vertical Track Switching)
+  // 2D Dragging Movement
   const handleClipPointerMove = useCallback(
     (e: React.PointerEvent) => {
       if (trimmingClip) {
@@ -431,16 +434,21 @@ export function Timeline() {
             });
           }
 
-          // SYNC LINKED CLIP if linkedSelection is ON
+          // SYNC LINKED CLIP: ONLY if linkedSelection is ON AND the linked track is NOT locked!
           if (linkedSelection && draggingClip.linkedClipId) {
-            result = result.map((track) => ({
-              ...track,
-              items: track.items.map((item) =>
-                item.id === draggingClip.linkedClipId
-                  ? { ...item, start: Math.max(0, (item.start || 0) + deltaSecs) }
-                  : item
-              ),
-            }));
+            result = result.map((track) => {
+              // If the track containing the linked clip is locked, do not move it!
+              if (track.isLocked) return track;
+
+              return {
+                ...track,
+                items: track.items.map((item) =>
+                  item.id === draggingClip.linkedClipId
+                    ? { ...item, start: Math.max(0, (item.start || 0) + deltaSecs) }
+                    : item
+                ),
+              };
+            });
           }
 
           return result;
@@ -461,6 +469,16 @@ export function Timeline() {
     const scrollLeft = timelineRef.current.scrollLeft;
     const x = e.clientX - rect.left + scrollLeft - 64;
     setPlayheadPosition(Math.max(0, x / zoomLevel));
+  };
+
+  // Track razor cutting position when mouse moves across timeline
+  const handleTimelinePointerMove = (e: React.PointerEvent) => {
+    if (activeTool === "razor" && timelineRef.current) {
+      const rect = timelineRef.current.getBoundingClientRect();
+      const scrollLeft = timelineRef.current.scrollLeft;
+      const mouseX = e.clientX - rect.left + scrollLeft - 64;
+      setRazorHoverTime(Math.max(0, mouseX / zoomLevel));
+    }
   };
 
   const getTimelineCursorClass = () => {
@@ -486,6 +504,8 @@ export function Timeline() {
       <div
         className={`flex-1 relative overflow-x-auto overflow-y-hidden flex flex-col ${getTimelineCursorClass()}`}
         ref={timelineRef}
+        onPointerMove={handleTimelinePointerMove}
+        onPointerLeave={() => setRazorHoverTime(null)}
       >
         <div
           className="min-w-max relative flex-1 flex flex-col"
@@ -533,6 +553,19 @@ export function Timeline() {
           {/* Unified Playhead */}
           <Playhead zoomLevel={zoomLevel} timelineRef={timelineRef} />
 
+          {/* Laser Razor Cut Line (Follows Mouse Cursor when Razor Tool is Active) */}
+          {activeTool === "razor" && razorHoverTime !== null && (
+            <div
+              className="absolute top-6 bottom-0 w-[1.5px] bg-red-500 shadow-[0_0_8px_rgba(239,68,68,1)] z-40 pointer-events-none flex flex-col items-center"
+              style={{ left: razorHoverTime * zoomLevel + 64 }}
+            >
+              <div className="w-2 h-2 bg-red-500 rotate-45 -mt-1 shadow" />
+              <div className="text-[8px] font-mono bg-red-950 text-red-200 px-1 py-0.5 rounded border border-red-500/50 mt-1 shadow-md whitespace-nowrap">
+                {formatTimecode(razorHoverTime).substring(3)}
+              </div>
+            </div>
+          )}
+
           {/* Tracks Area */}
           <div
             className="flex-1 relative pb-8"
@@ -569,8 +602,11 @@ export function Timeline() {
                     {track.items.map((item, idx) => {
                       const isThisDragged =
                         draggingClip?.trackId === track.id && draggingClip?.itemIdx === idx;
+                      // Only show visual drag on linked clip if its track is NOT locked
                       const isLinkedToDragged =
-                        linkedSelection && draggingClip?.linkedClipId === item.id;
+                        linkedSelection &&
+                        draggingClip?.linkedClipId === item.id &&
+                        !track.isLocked;
 
                       return (
                         <TimelineClip
