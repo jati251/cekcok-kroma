@@ -1,8 +1,8 @@
 import { motion } from "framer-motion";
-import { useDragStore } from "../../stores/useDragStore";
+import { useEditorStore } from "../../stores/useEditorStore";
 
 export function ProgramMonitor() {
-  const { draggedItem } = useDragStore();
+  const { draggedItem } = useEditorStore();
 
   return (
     <div className="flex-1 flex flex-col bg-background h-full">

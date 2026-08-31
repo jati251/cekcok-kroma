@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { useDragStore, DragItem } from "../../stores/useDragStore";
+import { useEditorStore, DragItem } from "../../stores/useEditorStore";
 
 const MOCK_MEDIA: DragItem[] = [
   { id: "media-1", type: "media", name: "Footage_01.mp4", color: "#3b82f6" },
@@ -8,7 +8,7 @@ const MOCK_MEDIA: DragItem[] = [
 ];
 
 export function MediaBin() {
-  const { setDraggedItem } = useDragStore();
+  const { setDraggedItem } = useEditorStore();
 
   return (
     <div className="w-1/4 border-r border-border bg-secondary flex flex-col h-full">

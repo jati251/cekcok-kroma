@@ -1,6 +1,8 @@
 import { MediaBin } from "./features/media-bin/MediaBin";
 import { ProgramMonitor } from "./features/preview/ProgramMonitor";
 import { Timeline } from "./features/timeline/Timeline";
+import { Toolbar } from "./features/toolbar/Toolbar";
+import { Inspector } from "./features/inspector/Inspector";
 
 function App() {
   return (
@@ -21,8 +23,10 @@ function App() {
 
       {/* Main Workspace */}
       <div className="flex flex-1 overflow-hidden">
+        <Toolbar />
         <MediaBin />
         <ProgramMonitor />
+        <Inspector />
       </div>
 
       {/* Timeline */}
