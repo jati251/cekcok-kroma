@@ -22,6 +22,8 @@ interface EditorStore {
   // Drag state
   draggedItem: DragItem | null;
   setDraggedItem: (item: DragItem | null) => void;
+  dragCursor: { x: number; y: number } | null;
+  setDragCursor: (pos: { x: number; y: number } | null) => void;
   
   // Tool state
   activeTool: Tool;
@@ -32,6 +34,11 @@ interface EditorStore {
   setPlayheadPosition: (pos: number) => void;
   zoomLevel: number; // pixels per second
   setZoomLevel: (zoom: number) => void;
+  inPoint: number | null;
+  outPoint: number | null;
+  setInPoint: (pos: number | null) => void;
+  setOutPoint: (pos: number | null) => void;
+  stepFrame: (frames: number) => void;
 
   // Selection & Delete
   selectedClipId: string | null;
@@ -54,15 +61,27 @@ interface EditorStore {
 export const useEditorStore = create<EditorStore>((set, get) => ({
   draggedItem: null,
   setDraggedItem: (item) => set({ draggedItem: item }),
+  dragCursor: null,
+  setDragCursor: (pos) => set({ dragCursor: pos }),
   
   activeTool: "selection",
   setActiveTool: (tool) => set({ activeTool: tool }),
 
   playheadPosition: 0,
-  setPlayheadPosition: (pos) => set({ playheadPosition: pos }),
+  setPlayheadPosition: (pos) => set({ playheadPosition: Math.max(0, pos) }),
   
   zoomLevel: 100, // 100px = 1 second
   setZoomLevel: (zoom) => set({ zoomLevel: Math.min(300, Math.max(10, zoom)) }),
+
+  inPoint: null,
+  outPoint: null,
+  setInPoint: (pos) => set({ inPoint: pos }),
+  setOutPoint: (pos) => set({ outPoint: pos }),
+  stepFrame: (frames) => {
+    const current = get().playheadPosition;
+    // 30fps standard
+    set({ playheadPosition: Math.max(0, current + (frames / 30)) });
+  },
 
   selectedClipId: null,
   setSelectedClipId: (id) => set({ selectedClipId: id }),

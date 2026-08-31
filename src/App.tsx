@@ -4,6 +4,7 @@ import { ProgramMonitor } from "./features/preview/ProgramMonitor";
 import { Timeline } from "./features/timeline/Timeline";
 import { Toolbar } from "./features/toolbar/Toolbar";
 import { Inspector } from "./features/inspector/Inspector";
+import { DragGhost } from "./components/DragGhost";
 import { useEditorStore } from "./stores/useEditorStore";
 
 function App() {
@@ -11,6 +12,34 @@ function App() {
   const setIsPlaying = useEditorStore(state => state.setIsPlaying);
   const deleteSelectedClip = useEditorStore(state => state.deleteSelectedClip);
   const setZoomLevel = useEditorStore(state => state.setZoomLevel);
+  const draggedItem = useEditorStore(state => state.draggedItem);
+  const setDraggedItem = useEditorStore(state => state.setDraggedItem);
+  const setDragCursor = useEditorStore(state => state.setDragCursor);
+  const stepFrame = useEditorStore(state => state.stepFrame);
+
+  // Global Pointer Tracker for Media Bin Dragging
+  useEffect(() => {
+    if (!draggedItem) return;
+
+    const handlePointerMove = (e: PointerEvent) => {
+      setDragCursor({ x: e.clientX, y: e.clientY });
+    };
+
+    const handlePointerUp = () => {
+      // Delay slightly so track onPointerUp can read draggedItem first
+      setTimeout(() => {
+        setDraggedItem(null);
+        setDragCursor(null);
+      }, 50);
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+  }, [draggedItem, setDragCursor, setDraggedItem]);
 
   // Global Keyboard Shortcuts
   useEffect(() => {
@@ -30,8 +59,15 @@ function App() {
           break;
         case ' ':
           e.preventDefault(); // prevent scrolling
-          // Using store directly to avoid stale closures in event listener
           setIsPlaying(!useEditorStore.getState().isPlaying);
+          break;
+        case 'arrowleft':
+          e.preventDefault();
+          stepFrame(-1);
+          break;
+        case 'arrowright':
+          e.preventDefault();
+          stepFrame(1);
           break;
         case 'backspace':
         case 'delete':
@@ -49,7 +85,7 @@ function App() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [setActiveTool, deleteSelectedClip]);
+  }, [setActiveTool, deleteSelectedClip, setIsPlaying, setZoomLevel, stepFrame]);
 
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-background text-foreground text-[11px] font-sans">
@@ -69,6 +105,9 @@ function App() {
         <Toolbar />
         <Timeline />
       </div>
+
+      {/* Floating Drag Preview that follows cursor */}
+      <DragGhost />
     </div>
   );
 }
