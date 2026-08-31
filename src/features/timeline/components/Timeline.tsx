@@ -198,10 +198,10 @@ export function Timeline() {
       }
 
       const cutTime = Date.now();
-      const videoA_id = `${item.id}-a1-${cutTime}`;
-      const videoB_id = `${item.id}-b1-${cutTime}`;
-      const audioA_id = item.linkedClipId ? `${item.linkedClipId}-a2-${cutTime}` : undefined;
-      const audioB_id = item.linkedClipId ? `${item.linkedClipId}-b2-${cutTime}` : undefined;
+      const clipA_id = `${item.id}-a1-${cutTime}`;
+      const clipB_id = `${item.id}-b1-${cutTime}`;
+      const linkedA_id = item.linkedClipId ? `${item.linkedClipId}-a2-${cutTime}` : undefined;
+      const linkedB_id = item.linkedClipId ? `${item.linkedClipId}-b2-${cutTime}` : undefined;
 
       const durA = clickTime - start;
       const durB = dur - durA;
@@ -214,14 +214,14 @@ export function Timeline() {
 
             const clipA: DragItem = {
               ...target,
-              id: videoA_id,
-              linkedClipId: audioA_id,
+              id: clipA_id,
+              linkedClipId: linkedA_id,
               duration: durA,
             };
             const clipB: DragItem = {
               ...target,
-              id: videoB_id,
-              linkedClipId: audioB_id,
+              id: clipB_id,
+              linkedClipId: linkedB_id,
               start: clickTime,
               duration: durB,
               trimIn: (target.trimIn || 0) + durA,
@@ -233,31 +233,40 @@ export function Timeline() {
           return t;
         });
 
-        if (linkedSelection && item.linkedClipId && audioA_id && audioB_id) {
+        // Cut linked clip ONLY if its track is not locked and clickTime is within its bounds
+        if (linkedSelection && item.linkedClipId && linkedA_id && linkedB_id) {
           nextTracks = nextTracks.map((t) => {
             if (t.isLocked) return t;
             const linkedIdx = t.items.findIndex((i) => i.id === item.linkedClipId);
             if (linkedIdx !== -1) {
               const newItems = [...t.items];
               const linkedTarget = newItems[linkedIdx];
+              const lStart = linkedTarget.start || 0;
+              const lDur = linkedTarget.duration || 0;
 
-              const linkedA: DragItem = {
-                ...linkedTarget,
-                id: audioA_id,
-                linkedClipId: videoA_id,
-                duration: durA,
-              };
-              const linkedB: DragItem = {
-                ...linkedTarget,
-                id: audioB_id,
-                linkedClipId: videoB_id,
-                start: clickTime,
-                duration: durB,
-                trimIn: (linkedTarget.trimIn || 0) + durA,
-              };
+              // Only cut if clickTime falls within the linked clip's actual boundaries
+              if (clickTime > lStart + 0.05 && clickTime < lStart + lDur - 0.05) {
+                const lDurA = clickTime - lStart;
+                const lDurB = lDur - lDurA;
 
-              newItems.splice(linkedIdx, 1, linkedA, linkedB);
-              return { ...t, items: newItems };
+                const linkedA: DragItem = {
+                  ...linkedTarget,
+                  id: linkedA_id,
+                  linkedClipId: clipA_id,
+                  duration: lDurA,
+                };
+                const linkedB: DragItem = {
+                  ...linkedTarget,
+                  id: linkedB_id,
+                  linkedClipId: clipB_id,
+                  start: clickTime,
+                  duration: lDurB,
+                  trimIn: (linkedTarget.trimIn || 0) + lDurA,
+                };
+
+                newItems.splice(linkedIdx, 1, linkedA, linkedB);
+                return { ...t, items: newItems };
+              }
             }
             return t;
           });

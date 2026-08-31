@@ -87,9 +87,10 @@ pub fn get_video_metadata(path: &str) -> Result<VideoMetadata, String> {
 pub fn get_audio_waveform(path: &str, points: usize) -> Result<Vec<f32>, String> {
     let target_points = if points == 0 { 100 } else { points };
 
-    // Extract downsampled raw 16-bit PCM mono audio using ffmpeg
+    // Extract downsampled raw 16-bit PCM mono audio using ffmpeg with multi-threading
     let output = Command::new("ffmpeg")
         .args([
+            "-threads", "0",
             "-i", path,
             "-vn",
             "-ac", "1",
@@ -149,6 +150,8 @@ pub fn export_frame(path: &str, timestamp: f64, output_path: &str) -> Result<Str
     let output = Command::new("ffmpeg")
         .args([
             "-ss", &t_str,
+            "-hwaccel", "auto",
+            "-threads", "0",
             "-i", path,
             "-vframes", "1",
             "-q:v", "2",

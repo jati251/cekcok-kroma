@@ -62,7 +62,11 @@ export function VideoCanvas({
             ref={videoRef}
             src={activeVideoSrc}
             className="w-full h-full object-contain"
-            style={{ filter: getResolutionFilter() }}
+            style={{
+              filter: getResolutionFilter(),
+              transform: "translateZ(0)",
+              willChange: "transform",
+            }}
             preload="auto"
             playsInline
             muted={isMuted}
