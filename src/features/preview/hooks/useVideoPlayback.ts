@@ -1,6 +1,19 @@
-import { useEffect, useRef, useState, useMemo } from "react";
+import { useEffect, useRef, useState, useMemo, useCallback } from "react";
 import { useEditorStore } from "../../../stores/useEditorStore";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+
+export interface PlaybackSegment {
+  id: string;
+  src: string;
+  trackId: string;
+  timelineStart: number;
+  timelineEnd: number;
+  trimIn: number;
+  duration: number;
+  hasAudio: boolean;
+  width?: number;
+  height?: number;
+}
 
 export function useVideoPlayback() {
   const playheadPosition = useEditorStore((state) => state.playheadPosition);
@@ -13,7 +26,7 @@ export function useVideoPlayback() {
   const masterVolume = useEditorStore((state) => state.masterVolume);
   const isMasterMuted = useEditorStore((state) => state.isMasterMuted);
 
-  // Ping-Pong Double-Buffered Video References & Synchronous Slot Tracking
+  // Dual-deck ping-pong video player references
   const videoRefA = useRef<HTMLVideoElement>(null);
   const videoRefB = useRef<HTMLVideoElement>(null);
   const activeSlotRef = useRef<"A" | "B">("A");
@@ -22,6 +35,11 @@ export function useVideoPlayback() {
   const [srcA, setSrcA] = useState<string | null>(null);
   const [srcB, setSrcB] = useState<string | null>(null);
 
+  // Compiled schedule from Rust sequence compiler
+  const [schedule, setSchedule] = useState<PlaybackSegment[]>([]);
+  const scheduleRef = useRef<PlaybackSegment[]>([]);
+  scheduleRef.current = schedule;
+
   const playPromiseRef = useRef<Promise<void> | null>(null);
   const isPlayingRef = useRef<boolean>(false);
   isPlayingRef.current = isPlaying;
@@ -29,8 +47,28 @@ export function useVideoPlayback() {
   const [meterL, setMeterL] = useState(-60);
   const [meterR, setMeterR] = useState(-60);
 
+  // Sync sequence schedule from Rust whenever tracks change
+  useEffect(() => {
+    let cancelled = false;
+    invoke<PlaybackSegment[]>("get_playback_schedule")
+      .then((segs) => {
+        if (!cancelled) {
+          setSchedule(segs);
+        }
+      })
+      .catch((err) => {
+        console.error("Failed to get playback schedule from Rust:", err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [tracks]);
+
   // Compute total sequence duration
   const totalDuration = useMemo(() => {
+    if (schedule.length > 0) {
+      return Math.max(schedule[schedule.length - 1].timelineEnd, 10);
+    }
     let max = 0;
     tracks.forEach((t) => {
       t.items.forEach((item) => {
@@ -39,64 +77,80 @@ export function useVideoPlayback() {
       });
     });
     return Math.max(max, 10);
-  }, [tracks]);
+  }, [schedule, tracks]);
 
-  // Find top-most active video clip at current playhead position (V2 > V1)
-  const activeClip = useMemo(() => {
-    const videoTracks = tracks.filter((t) => t.type === "video");
-    for (let i = videoTracks.length - 1; i >= 0; i--) {
-      const track = videoTracks[i];
-      const clip = track.items.find(
-        (item) =>
-          playheadPosition >= (item.start || 0) &&
-          playheadPosition < (item.start || 0) + (item.duration || 0)
-      );
-      if (clip && clip.src) {
-        return clip;
+  // Helper to find segment at any timeline timestamp
+  const getSegmentAt = useCallback((time: number): PlaybackSegment | null => {
+    const list = scheduleRef.current;
+    for (const seg of list) {
+      if (time >= seg.timelineStart && time < seg.timelineEnd) {
+        return seg;
       }
     }
     return null;
-  }, [tracks, playheadPosition]);
+  }, []);
 
-  // Pre-load lookup: find the NEXT adjacent video clip on the timeline
-  const nextClip = useMemo(() => {
-    if (!activeClip) return null;
-    const currentEnd = (activeClip.start || 0) + (activeClip.duration || 0);
-    const videoTracks = tracks.filter((t) => t.type === "video");
-
-    for (let i = videoTracks.length - 1; i >= 0; i--) {
-      const track = videoTracks[i];
-      const found = track.items.find(
-        (item) =>
-          item.id !== activeClip.id &&
-          Math.abs((item.start || 0) - currentEnd) <= 0.08
-      );
-      if (found && found.src) {
-        return found;
+  // Helper to find next segment after current timestamp
+  const getNextSegmentAfter = useCallback((time: number): PlaybackSegment | null => {
+    const list = scheduleRef.current;
+    for (const seg of list) {
+      if (seg.timelineStart >= time - 0.01) {
+        return seg;
       }
     }
     return null;
-  }, [tracks, activeClip]);
+  }, []);
 
-  // Active audio clip on any unmuted audio track
-  const activeAudioClip = useMemo(() => {
+  // Active audio detection
+  const isAudioActiveAt = useCallback((time: number): boolean => {
     const audioTracks = tracks.filter((t) => t.type === "audio" && !t.isMuted);
     for (const track of audioTracks) {
       const clip = track.items.find(
-        (item) =>
-          playheadPosition >= (item.start || 0) &&
-          playheadPosition < (item.start || 0) + (item.duration || 0)
+        (item) => time >= (item.start || 0) && time < (item.start || 0) + (item.duration || 0)
       );
-      if (clip) return clip;
+      if (clip) return true;
     }
-    return null;
-  }, [tracks, playheadPosition]);
+    return false;
+  }, [tracks]);
 
-  // UNIFIED AUDIO PIPELINE: Single Source of Truth
-  const isAudible = !isMasterMuted && !!activeAudioClip;
+  const currentSegment = useMemo(() => getSegmentAt(playheadPosition), [getSegmentAt, playheadPosition, schedule]);
+  const isAudible = !isMasterMuted && isAudioActiveAt(playheadPosition);
   const effectiveVolume = isAudible ? masterVolume : 0;
 
-  // Apply audio states to BOTH video elements strictly
+  // Sync sources & pre-load standby deck when active segment changes
+  useEffect(() => {
+    if (!currentSegment) {
+      // Check if there is an upcoming segment to pre-load
+      const nextUpcoming = getNextSegmentAfter(playheadPosition);
+      if (nextUpcoming) {
+        const converted = convertFileSrc(nextUpcoming.src);
+        if (activeSlot === "A") {
+          setSrcA(converted);
+        } else {
+          setSrcB(converted);
+        }
+      }
+      return;
+    }
+
+    const currentSrcConverted = convertFileSrc(currentSegment.src);
+    const nextSeg = getNextSegmentAfter(currentSegment.timelineEnd);
+    const nextSrcConverted = nextSeg ? convertFileSrc(nextSeg.src) : null;
+
+    if (activeSlot === "A") {
+      setSrcA(currentSrcConverted);
+      if (nextSrcConverted) {
+        setSrcB(nextSrcConverted);
+      }
+    } else {
+      setSrcB(currentSrcConverted);
+      if (nextSrcConverted) {
+        setSrcA(nextSrcConverted);
+      }
+    }
+  }, [currentSegment, activeSlot, playheadPosition, getNextSegmentAfter]);
+
+  // Apply volume and mute strictly to the active video element
   useEffect(() => {
     const activeEl = activeSlotRef.current === "A" ? videoRefA.current : videoRefB.current;
     const standbyEl = activeSlotRef.current === "A" ? videoRefB.current : videoRefA.current;
@@ -105,61 +159,31 @@ export function useVideoPlayback() {
       activeEl.muted = !isAudible;
       activeEl.volume = effectiveVolume;
     }
-
-    // Standby is ALWAYS hard-muted and silent so it can never leak audio
     if (standbyEl) {
       standbyEl.muted = true;
       standbyEl.volume = 0;
     }
   }, [isAudible, effectiveVolume, activeSlot]);
 
-  // Sync Active & Standby Sources (Dual-Buffer Preloading)
+  // PAUSED SCRUBBING / SEEKING: ONLY when NOT playing!
+  // This completely eliminates seek interference during active playback.
   useEffect(() => {
-    const convertedActive = activeClip?.src ? convertFileSrc(activeClip.src) : null;
-    const convertedNext = nextClip?.src ? convertFileSrc(nextClip.src) : null;
+    if (isPlaying) return;
 
-    if (activeSlot === "A") {
-      setSrcA((prev) => (prev !== convertedActive ? convertedActive : prev));
-      if (convertedNext) {
-        setSrcB((prev) => (prev !== convertedNext ? convertedNext : prev));
-      }
-    } else {
-      setSrcB((prev) => (prev !== convertedActive ? convertedActive : prev));
-      if (convertedNext) {
-        setSrcA((prev) => (prev !== convertedNext ? convertedNext : prev));
-      }
-    }
-  }, [activeClip, nextClip, activeSlot]);
-
-  // Pre-seek standby video buffer to next clip's trimIn so it is primed in GPU memory
-  useEffect(() => {
-    if (!nextClip) return;
-    const standbyEl = activeSlotRef.current === "A" ? videoRefB.current : videoRefA.current;
-    if (standbyEl && standbyEl.readyState >= 1) {
-      const target = nextClip.trimIn || 0;
-      if (Math.abs(standbyEl.currentTime - target) > 0.05) {
-        standbyEl.currentTime = target;
-      }
-    }
-  }, [nextClip, activeSlot]);
-
-  // Scrubbing & Seeking when paused: only seek if user moved playhead
-  useEffect(() => {
-    if (isPlaying || !activeClip) return;
     const activeEl = activeSlotRef.current === "A" ? videoRefA.current : videoRefB.current;
-    if (!activeEl) return;
+    if (!activeEl || !currentSegment) return;
 
-    const targetTime = Math.max(
+    const targetMediaTime = Math.max(
       0,
-      playheadPosition - (activeClip.start || 0) + (activeClip.trimIn || 0)
+      currentSegment.trimIn + (playheadPosition - currentSegment.timelineStart)
     );
 
-    if (Math.abs(activeEl.currentTime - targetTime) > 0.02) {
-      activeEl.currentTime = targetTime;
+    if (Math.abs(activeEl.currentTime - targetMediaTime) > 0.03) {
+      activeEl.currentTime = targetMediaTime;
     }
-  }, [playheadPosition, isPlaying, activeClip]);
+  }, [playheadPosition, isPlaying, currentSegment]);
 
-  // Rapid Play / Pause: Zero Stutter, No Buffer Flush
+  // RAPID PLAY / PAUSE HANDLER
   useEffect(() => {
     const activeEl = activeSlotRef.current === "A" ? videoRefA.current : videoRefB.current;
 
@@ -182,31 +206,33 @@ export function useVideoPlayback() {
       return;
     }
 
-    // Resuming: start immediately without seeking if already in place
-    if (activeEl && activeClip) {
-      const expectedTime = Math.max(
+    // Starting playback: ensure active deck is ready and start immediately
+    if (activeEl && currentSegment) {
+      const targetMediaTime = Math.max(
         0,
-        playheadPosition - (activeClip.start || 0) + (activeClip.trimIn || 0)
+        currentSegment.trimIn + (playheadPosition - currentSegment.timelineStart)
       );
 
-      if (Math.abs(activeEl.currentTime - expectedTime) > 0.08) {
-        activeEl.currentTime = expectedTime;
+      // Only seek on play start if significantly off position (> 100ms)
+      if (Math.abs(activeEl.currentTime - targetMediaTime) > 0.1) {
+        activeEl.currentTime = targetMediaTime;
       }
 
       if (activeEl.paused) {
         playPromiseRef.current = activeEl.play().catch(() => {});
       }
     }
-  }, [isPlaying, activeClip]);
+  }, [isPlaying]); // STRICT DEPENDENCY: Only triggers on play/pause toggle!
 
-  // PREMIERE PRO MERCURY PLAYBACK ENGINE: Monotonic Master Sequence Clock with Phase-Locked Loop (PLL)
+  // PREMIERE PRO MERCURY PLAYBACK ENGINE:
+  // Hardware Media Clock is MASTER. No synthetic seeking during playback.
   useEffect(() => {
     if (!isPlaying) return;
 
     let animationFrameId: number;
     let lastPerfTime = performance.now();
 
-    const sequenceTick = (now: number) => {
+    const playbackLoop = (now: number) => {
       const dt = (now - lastPerfTime) / 1000;
       lastPerfTime = now;
 
@@ -218,65 +244,92 @@ export function useVideoPlayback() {
       const currentOut = useEditorStore.getState().outPoint;
       const currentIn = useEditorStore.getState().inPoint;
 
-      // Check loop bounds
+      // 1. Check Loop Out Point
       if (currentOut !== null && currentPlayhead >= currentOut) {
         const loopStart = currentIn || 0;
         setPlayheadPosition(loopStart);
-        if (activeEl && activeClip) {
-          activeEl.currentTime = Math.max(
-            0,
-            loopStart - (activeClip.start || 0) + (activeClip.trimIn || 0)
-          );
+        const seg = getSegmentAt(loopStart);
+        if (activeEl && seg) {
+          activeEl.currentTime = seg.trimIn + (loopStart - seg.timelineStart);
         }
-        animationFrameId = requestAnimationFrame(sequenceTick);
+        animationFrameId = requestAnimationFrame(playbackLoop);
         return;
       }
 
-      // 1. Advance Master Sequence Clock smoothly via high-resolution monotonic timer (60fps steady!)
-      let nextPlayhead = currentPlayhead + dt;
+      // 2. Active Segment Evaluation
+      const activeSeg = getSegmentAt(currentPlayhead);
 
-      // 2. Multi-Clip Boundary & Transition Check
-      if (activeClip) {
-        const clipEndPos = (activeClip.start || 0) + (activeClip.duration || 0);
-
-        if (nextPlayhead >= clipEndPos) {
-          // Reached or crossed clip boundary!
-          if (nextClip && standbyEl) {
-            // PING-PONG INSTANT TRANSITION (0ms Latency!)
-            activeEl?.pause();
-            standbyEl.currentTime = nextClip.trimIn || 0;
-            standbyEl.muted = !isAudible;
-            standbyEl.volume = effectiveVolume;
-            playPromiseRef.current = standbyEl.play().catch(() => {});
-
-            const newSlot = currentSlot === "A" ? "B" : "A";
-            activeSlotRef.current = newSlot;
-            setActiveSlot(newSlot);
-            nextPlayhead = nextClip.start || 0;
-          }
-        } else if (activeEl) {
-          // 3. Phase-Locked Loop (PLL): Slave video sync to Master Sequence Clock
-          if (activeEl.paused) {
+      if (activeSeg) {
+        // CASE A: Inside an active video clip
+        if (activeEl) {
+          // Ensure video is playing
+          if (activeEl.paused && activeEl.readyState >= 2) {
             playPromiseRef.current = activeEl.play().catch(() => {});
           }
 
-          const targetMediaTime = Math.max(
-            0,
-            nextPlayhead - (activeClip.start || 0) + (activeClip.trimIn || 0)
-          );
-          const drift = activeEl.currentTime - targetMediaTime;
+          // DERIVE Master Sequence Time DIRECTLY from hardware video clock!
+          const mediaElapsed = Math.max(0, activeEl.currentTime - activeSeg.trimIn);
+          const hardwareSeqTime = activeSeg.timelineStart + mediaElapsed;
 
-          // Only perform hard seek if drift is severe (> 200ms)
-          if (Math.abs(drift) > 0.2) {
-            activeEl.currentTime = targetMediaTime;
+          // Seamless Clip Transition Check (Cut Boundary)
+          if (hardwareSeqTime >= activeSeg.timelineEnd - 0.03 || activeEl.ended) {
+            // Segment has reached its cut boundary!
+            const nextSeg = getNextSegmentAfter(activeSeg.timelineEnd);
+
+            if (nextSeg && Math.abs(nextSeg.timelineStart - activeSeg.timelineEnd) <= 0.08 && standbyEl) {
+              // SEAMLESS PING-PONG CUT SWITCH (0ms latency, zero gap)
+              activeEl.pause();
+              standbyEl.currentTime = nextSeg.trimIn;
+              standbyEl.muted = !isAudioActiveAt(nextSeg.timelineStart);
+              standbyEl.volume = masterVolume;
+              playPromiseRef.current = standbyEl.play().catch(() => {});
+
+              const newSlot = currentSlot === "A" ? "B" : "A";
+              activeSlotRef.current = newSlot;
+              setActiveSlot(newSlot);
+
+              setPlayheadPosition(nextSeg.timelineStart);
+            } else if (nextSeg) {
+              // There is a gap between clips: pause video, let timer advance across gap
+              activeEl.pause();
+              setPlayheadPosition(currentPlayhead + dt);
+            } else {
+              // Reached sequence end!
+              setIsPlaying(false);
+              setPlayheadPosition(activeSeg.timelineEnd);
+              return;
+            }
+          } else {
+            // Normal forward playback: playhead tracks hardware video position perfectly
+            setPlayheadPosition(hardwareSeqTime);
           }
+        } else {
+          setPlayheadPosition(currentPlayhead + dt);
+        }
+      } else {
+        // CASE B: In a gap or empty area between clips
+        const nextUpcoming = getNextSegmentAfter(currentPlayhead);
+        const nextPlayhead = currentPlayhead + dt;
+
+        if (nextUpcoming && nextPlayhead >= nextUpcoming.timelineStart) {
+          // Arrived at upcoming clip!
+          if (activeEl) {
+            activeEl.currentTime = nextUpcoming.trimIn;
+            playPromiseRef.current = activeEl.play().catch(() => {});
+          }
+          setPlayheadPosition(nextUpcoming.timelineStart);
+        } else if (nextUpcoming) {
+          // Still in gap: advance time smoothly
+          setPlayheadPosition(nextPlayhead);
+        } else {
+          // Beyond end of sequence
+          setIsPlaying(false);
+          return;
         }
       }
 
-      setPlayheadPosition(nextPlayhead);
-
-      // Audio VU meter
-      if (isAudible) {
+      // 3. Audio VU Meter
+      if (!useEditorStore.getState().isMasterMuted && isAudioActiveAt(useEditorStore.getState().playheadPosition)) {
         const base = -14 + Math.sin(now / 70) * 10;
         setMeterL(Math.max(-48, Math.min(-2, base + Math.random() * 4)));
         setMeterR(Math.max(-48, Math.min(-2, base + Math.random() * 5)));
@@ -285,12 +338,12 @@ export function useVideoPlayback() {
         setMeterR(-60);
       }
 
-      animationFrameId = requestAnimationFrame(sequenceTick);
+      animationFrameId = requestAnimationFrame(playbackLoop);
     };
 
-    animationFrameId = requestAnimationFrame(sequenceTick);
+    animationFrameId = requestAnimationFrame(playbackLoop);
     return () => cancelAnimationFrame(animationFrameId);
-  }, [isPlaying, activeClip, nextClip, isAudible, effectiveVolume, setPlayheadPosition]);
+  }, [isPlaying, getSegmentAt, getNextSegmentAfter, isAudioActiveAt, masterVolume, setIsPlaying, setPlayheadPosition]);
 
   const activeVideoRef = activeSlot === "A" ? videoRefA : videoRefB;
 
@@ -301,7 +354,7 @@ export function useVideoPlayback() {
     srcA,
     srcB,
     activeSlot,
-    hasMedia: !!activeClip,
+    hasMedia: !!currentSegment || schedule.length > 0,
     isAudible,
     effectiveVolume,
     totalDuration,

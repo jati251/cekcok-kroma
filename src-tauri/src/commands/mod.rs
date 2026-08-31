@@ -429,3 +429,9 @@ pub fn trim_clip_cmd(
 
     Ok(doc.clone())
 }
+
+#[tauri::command]
+pub fn get_playback_schedule(state: State<'_, AppState>) -> Result<Vec<crate::engine::playback::PlaybackSegment>, String> {
+    let doc = state.state.lock().map_err(|e| e.to_string())?;
+    Ok(crate::engine::playback::compile_playback_schedule(&doc.tracks))
+}

@@ -131,7 +131,8 @@ pub fn run() {
             commands::undo_action_cmd,
             commands::redo_action_cmd,
             commands::split_clip_cmd,
-            commands::trim_clip_cmd
+            commands::trim_clip_cmd,
+            commands::get_playback_schedule
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
