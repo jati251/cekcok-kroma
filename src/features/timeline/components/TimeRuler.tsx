@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { formatTimecode } from "../../stores/useEditorStore";
+import { formatTimecode } from "../../../utils/timecode";
 
 interface TimeRulerProps {
   zoomLevel: number;
@@ -28,11 +28,11 @@ export function TimeRuler({ zoomLevel, width }: TimeRulerProps) {
     ctx.textBaseline = "top";
 
     const totalSeconds = width / zoomLevel;
-    
+
     // Draw ticks
     for (let s = 0; s <= totalSeconds; s++) {
       const x = s * zoomLevel;
-      
+
       // Draw second tick
       ctx.beginPath();
       ctx.moveTo(x, height - 10);
@@ -55,10 +55,10 @@ export function TimeRuler({ zoomLevel, width }: TimeRulerProps) {
   }, [zoomLevel, width]);
 
   return (
-    <canvas 
-      ref={canvasRef} 
-      width={width} 
-      height={24} 
+    <canvas
+      ref={canvasRef}
+      width={width}
+      height={24}
       className="absolute top-0 left-0 w-full h-full pointer-events-none"
     />
   );

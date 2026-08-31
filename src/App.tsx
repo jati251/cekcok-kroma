@@ -1,23 +1,22 @@
 import { useEffect } from "react";
-import { MediaBin } from "./features/media-bin/MediaBin";
-import { ProgramMonitor } from "./features/preview/ProgramMonitor";
-import { Timeline } from "./features/timeline/Timeline";
-import { Toolbar } from "./features/toolbar/Toolbar";
-import { Inspector } from "./features/inspector/Inspector";
+import { MediaBin } from "./features/media-bin";
+import { ProgramMonitor } from "./features/preview";
+import { Timeline } from "./features/timeline";
+import { Toolbar } from "./features/toolbar";
+import { Inspector } from "./features/inspector";
 import { DragGhost } from "./components/DragGhost";
 import { useEditorStore } from "./stores/useEditorStore";
+import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 
 function App() {
-  const setActiveTool = useEditorStore(state => state.setActiveTool);
-  const setIsPlaying = useEditorStore(state => state.setIsPlaying);
-  const deleteSelectedClip = useEditorStore(state => state.deleteSelectedClip);
-  const setZoomLevel = useEditorStore(state => state.setZoomLevel);
-  const draggedItem = useEditorStore(state => state.draggedItem);
-  const setDraggedItem = useEditorStore(state => state.setDraggedItem);
-  const setDragCursor = useEditorStore(state => state.setDragCursor);
-  const stepFrame = useEditorStore(state => state.stepFrame);
+  const draggedItem = useEditorStore((state) => state.draggedItem);
+  const setDraggedItem = useEditorStore((state) => state.setDraggedItem);
+  const setDragCursor = useEditorStore((state) => state.setDragCursor);
 
-  // Global Pointer Tracker for Media Bin Dragging
+  // Global Keyboard Shortcuts (Space, V, C, H, Delete, Frame steps)
+  useKeyboardShortcuts();
+
+  // Global Pointer Tracker for Dragging Media to Timeline
   useEffect(() => {
     if (!draggedItem) return;
 
@@ -26,7 +25,6 @@ function App() {
     };
 
     const handlePointerUp = () => {
-      // Delay slightly so track onPointerUp can read draggedItem first
       setTimeout(() => {
         setDraggedItem(null);
         setDragCursor(null);
@@ -41,66 +39,18 @@ function App() {
     };
   }, [draggedItem, setDragCursor, setDraggedItem]);
 
-  // Global Keyboard Shortcuts
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Ignore if user is typing in an input field (like Inspector)
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-
-      switch(e.key.toLowerCase()) {
-        case 'v':
-          setActiveTool('selection');
-          break;
-        case 'c':
-          setActiveTool('razor');
-          break;
-        case 'h':
-          setActiveTool('hand');
-          break;
-        case ' ':
-          e.preventDefault(); // prevent scrolling
-          setIsPlaying(!useEditorStore.getState().isPlaying);
-          break;
-        case 'arrowleft':
-          e.preventDefault();
-          stepFrame(-1);
-          break;
-        case 'arrowright':
-          e.preventDefault();
-          stepFrame(1);
-          break;
-        case 'backspace':
-        case 'delete':
-          deleteSelectedClip();
-          break;
-        case '=':
-        case '+':
-          setZoomLevel(useEditorStore.getState().zoomLevel + 10);
-          break;
-        case '-':
-          setZoomLevel(useEditorStore.getState().zoomLevel - 10);
-          break;
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [setActiveTool, deleteSelectedClip, setIsPlaying, setZoomLevel, stepFrame]);
-
   return (
-    <div className="flex flex-col h-screen overflow-hidden bg-background text-foreground text-[11px] font-sans">
-
-
-      {/* Main Workspace */}
+    <div className="flex flex-col h-screen overflow-hidden bg-background text-foreground text-[11px] font-sans select-none">
+      {/* Top Half: Media Bin, Effect Controls & Program Monitor */}
       <div className="flex flex-1 overflow-hidden p-0.5 gap-0.5 bg-[#141414]">
-        <div className="flex flex-col w-[300px] gap-0.5">
+        <div className="flex flex-col w-[300px] gap-0.5 shrink-0">
           <MediaBin />
           <Inspector />
         </div>
         <ProgramMonitor />
       </div>
 
-      {/* Timeline Area */}
+      {/* Bottom Half: Tools & Multi-Track Timeline */}
       <div className="h-[45%] flex gap-0.5 bg-[#141414] p-0.5 pt-0">
         <Toolbar />
         <Timeline />

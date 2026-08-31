@@ -1,59 +1,50 @@
 import { create } from "zustand";
+import { DragItem, Track, Tool, DragCursorPosition } from "../types/editor";
+import { DEFAULT_TRACKS, ZOOM_LIMITS, DEFAULT_FPS } from "../constants/editor";
+import { formatTimecode } from "../utils/timecode";
 
-export interface DragItem {
-  id: string;
-  type: "media" | "clip";
-  name: string;
-  color?: string;
-  start?: number; // now in seconds
-  duration?: number; // now in seconds
-  src?: string; // real file path
-}
-
-export interface Track {
-  id: string;
-  name: string;
-  items: DragItem[];
-}
-
-export type Tool = "selection" | "razor" | "hand";
+// Re-export types for backward compatibility across features
+export type { DragItem, Track, Tool, DragCursorPosition };
+export { formatTimecode };
 
 interface EditorStore {
   // Drag state
   draggedItem: DragItem | null;
   setDraggedItem: (item: DragItem | null) => void;
-  dragCursor: { x: number; y: number } | null;
-  setDragCursor: (pos: { x: number; y: number } | null) => void;
-  
+  dragCursor: DragCursorPosition | null;
+  setDragCursor: (pos: DragCursorPosition | null) => void;
+
   // Tool state
   activeTool: Tool;
   setActiveTool: (tool: Tool) => void;
 
-  // Timeline state
+  // Timeline & Playhead
   playheadPosition: number; // in seconds
   setPlayheadPosition: (pos: number) => void;
   zoomLevel: number; // pixels per second
   setZoomLevel: (zoom: number) => void;
+
+  // Range In/Out points
   inPoint: number | null;
   outPoint: number | null;
   setInPoint: (pos: number | null) => void;
   setOutPoint: (pos: number | null) => void;
   stepFrame: (frames: number) => void;
 
-  // Selection & Delete
+  // Clip Selection & Editing
   selectedClipId: string | null;
   setSelectedClipId: (id: string | null) => void;
   deleteSelectedClip: () => void;
-  
-  // Playback
+
+  // Playback state
   isPlaying: boolean;
   setIsPlaying: (playing: boolean) => void;
 
-  // Tracks State
+  // Sequence Tracks
   tracks: Track[];
   setTracks: (updater: (prev: Track[]) => Track[]) => void;
-  
-  // Media Bin State
+
+  // Media Bin Items
   mediaItems: DragItem[];
   addMediaItem: (item: DragItem) => void;
 }
@@ -63,15 +54,16 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   setDraggedItem: (item) => set({ draggedItem: item }),
   dragCursor: null,
   setDragCursor: (pos) => set({ dragCursor: pos }),
-  
+
   activeTool: "selection",
   setActiveTool: (tool) => set({ activeTool: tool }),
 
   playheadPosition: 0,
   setPlayheadPosition: (pos) => set({ playheadPosition: Math.max(0, pos) }),
-  
-  zoomLevel: 100, // 100px = 1 second
-  setZoomLevel: (zoom) => set({ zoomLevel: Math.min(300, Math.max(10, zoom)) }),
+
+  zoomLevel: ZOOM_LIMITS.DEFAULT,
+  setZoomLevel: (zoom) =>
+    set({ zoomLevel: Math.min(ZOOM_LIMITS.MAX, Math.max(ZOOM_LIMITS.MIN, zoom)) }),
 
   inPoint: null,
   outPoint: null,
@@ -79,20 +71,19 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   setOutPoint: (pos) => set({ outPoint: pos }),
   stepFrame: (frames) => {
     const current = get().playheadPosition;
-    // 30fps standard
-    set({ playheadPosition: Math.max(0, current + (frames / 30)) });
+    set({ playheadPosition: Math.max(0, current + frames / DEFAULT_FPS) });
   },
 
   selectedClipId: null,
   setSelectedClipId: (id) => set({ selectedClipId: id }),
-  
+
   deleteSelectedClip: () => {
     const state = get();
     if (!state.selectedClipId) return;
-    state.setTracks((prev) => 
-      prev.map(t => ({
+    state.setTracks((prev) =>
+      prev.map((t) => ({
         ...t,
-        items: t.items.filter(item => item.id !== state.selectedClipId)
+        items: t.items.filter((item) => item.id !== state.selectedClipId),
       }))
     );
     set({ selectedClipId: null });
@@ -101,22 +92,10 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   isPlaying: false,
   setIsPlaying: (playing) => set({ isPlaying: playing }),
 
-  tracks: [
-    { id: "v1", name: "V1", items: [] },
-    { id: "v2", name: "V2", items: [] },
-    { id: "a1", name: "A1", items: [] },
-  ],
+  tracks: DEFAULT_TRACKS,
   setTracks: (updater) => set((state) => ({ tracks: updater(state.tracks) })),
-  
-  mediaItems: [],
-  addMediaItem: (item) => set((state) => ({ mediaItems: [...state.mediaItems, item] })),
-}));
 
-// Utility for SMPTE timecode (HH:MM:SS:FF) assuming 30fps
-export const formatTimecode = (seconds: number) => {
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = Math.floor(seconds % 60);
-  const f = Math.floor((seconds % 1) * 30);
-  return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}:${f.toString().padStart(2, '0')}`;
-};
+  mediaItems: [],
+  addMediaItem: (item) =>
+    set((state) => ({ mediaItems: [...state.mediaItems, item] })),
+}));
