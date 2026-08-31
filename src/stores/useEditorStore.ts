@@ -80,10 +80,23 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   deleteSelectedClip: () => {
     const state = get();
     if (!state.selectedClipId) return;
+
+    // Find if the selected clip has a linked partner
+    let linkedId: string | undefined;
+    for (const t of state.tracks) {
+      const found = t.items.find((item) => item.id === state.selectedClipId);
+      if (found) {
+        linkedId = found.linkedClipId;
+        break;
+      }
+    }
+
     state.setTracks((prev) =>
       prev.map((t) => ({
         ...t,
-        items: t.items.filter((item) => item.id !== state.selectedClipId),
+        items: t.items.filter(
+          (item) => item.id !== state.selectedClipId && item.id !== linkedId
+        ),
       }))
     );
     set({ selectedClipId: null });

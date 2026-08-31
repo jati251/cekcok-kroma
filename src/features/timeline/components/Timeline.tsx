@@ -26,14 +26,18 @@ export function Timeline() {
   const timelineRef = useRef<HTMLDivElement>(null);
   const [timelineWidth, setTimelineWidth] = useState(1000);
 
-  // Dragging state for moving clips within tracks
+  // 2D Dragging state for clips (horizontal time + vertical track switching)
   const [draggingClip, setDraggingClip] = useState<{
     trackId: string;
     itemIdx: number;
     initialX: number;
+    initialY: number;
     initialStart: number;
+    linkedClipId?: string;
   } | null>(null);
+
   const [dragOffset, setDragOffset] = useState<number>(0);
+  const [targetTrackId, setTargetTrackId] = useState<string | null>(null);
 
   useEffect(() => {
     if (timelineRef.current) {
@@ -48,7 +52,7 @@ export function Timeline() {
     return () => window.removeEventListener("resize", handleResize);
   }, []);
 
-  // Drop media from MediaBin at mouse X timestamp + AUTOMATIC LINKED AUDIO TRACK SPAWN!
+  // Drop media from MediaBin at mouse X timestamp + AUTOMATIC LINKED AUDIO TRACK SPAWN
   const handlePointerUpBinDrop = (e: React.PointerEvent, trackId: string) => {
     if (draggedItem && activeTool === "selection") {
       let dropTime = 0;
@@ -70,6 +74,7 @@ export function Timeline() {
         linkedClipId: audioClipId,
         start: dropTime,
         duration,
+        trimIn: 0,
         color: "#2d8ceb",
       };
 
@@ -80,6 +85,7 @@ export function Timeline() {
         name: `${draggedItem.name} [Audio]`,
         start: dropTime,
         duration,
+        trimIn: 0,
         color: "#10b981", // Emerald green for Premiere Pro audio
         waveform: draggedItem.waveform || [],
       };
@@ -92,7 +98,6 @@ export function Timeline() {
               items: [...track.items, videoClip],
             };
           }
-          // Also automatically add linked audio to A1 if dropping on video track and item has audio
           if (track.id === "a1" && trackId.startsWith("v") && draggedItem.hasAudio !== false) {
             return {
               ...track,
@@ -108,7 +113,7 @@ export function Timeline() {
     }
   };
 
-  // Start dragging a clip or cut with razor
+  // Start 2D dragging a clip or razor cut
   const handleClipPointerDown = (
     e: React.PointerEvent,
     trackId: string,
@@ -120,15 +125,19 @@ export function Timeline() {
       setSelectedClipId(item.id);
       (e.target as HTMLElement).setPointerCapture(e.pointerId);
       setDragOffset(0);
+      setTargetTrackId(trackId);
       setDraggingClip({
         trackId,
         itemIdx,
         initialX: e.clientX,
+        initialY: e.clientY,
         initialStart: item.start || 0,
+        linkedClipId: item.linkedClipId,
       });
     } else if (activeTool === "razor") {
-      setTracks((prev) =>
-        prev.map((track) => {
+      // Linked Razor Cut: Cut both video and linked audio clip at the exact playhead position
+      setTracks((prev) => {
+        let nextTracks = prev.map((track) => {
           if (track.id === trackId) {
             const newItems = [...track.items];
             const target = newItems[itemIdx];
@@ -144,27 +153,89 @@ export function Timeline() {
             const durA = splitPos - start;
             const durB = dur - durA;
 
-            const clipA = { ...target, id: `${target.id}-a`, duration: durA };
-            const clipB = { ...target, id: `${target.id}-b`, start: splitPos, duration: durB };
+            const clipA: DragItem = { ...target, id: `${target.id}-a1`, duration: durA };
+            const clipB: DragItem = {
+              ...target,
+              id: `${target.id}-b1`,
+              start: splitPos,
+              duration: durB,
+              trimIn: (target.trimIn || 0) + durA,
+            };
 
             newItems.splice(itemIdx, 1, clipA, clipB);
             return { ...track, items: newItems };
           }
           return track;
-        })
-      );
+        });
+
+        // Also cut linked clip on the other track
+        if (item.linkedClipId) {
+          nextTracks = nextTracks.map((track) => {
+            const linkedIdx = track.items.findIndex((i) => i.id === item.linkedClipId);
+            if (linkedIdx !== -1) {
+              const newItems = [...track.items];
+              const linkedTarget = newItems[linkedIdx];
+
+              let splitPos = playheadPosition;
+              const start = linkedTarget.start || 0;
+              const dur = linkedTarget.duration || 0;
+
+              if (splitPos <= start || splitPos >= start + dur) {
+                splitPos = start + dur / 2;
+              }
+
+              const durA = splitPos - start;
+              const durB = dur - durA;
+
+              const linkedA: DragItem = { ...linkedTarget, id: `${linkedTarget.id}-a2`, duration: durA };
+              const linkedB: DragItem = {
+                ...linkedTarget,
+                id: `${linkedTarget.id}-b2`,
+                start: splitPos,
+                duration: durB,
+                trimIn: (linkedTarget.trimIn || 0) + durA,
+              };
+
+              newItems.splice(linkedIdx, 1, linkedA, linkedB);
+              return { ...track, items: newItems };
+            }
+            return track;
+          });
+        }
+
+        return nextTracks;
+      });
     }
   };
 
+  // 2D Dragging Movement (Horizontal Delta + Vertical Track Switching)
   const handleClipPointerMove = useCallback(
     (e: React.PointerEvent) => {
       if (!draggingClip) return;
       const deltaX = e.clientX - draggingClip.initialX;
+      const deltaY = e.clientY - draggingClip.initialY;
+
       setDragOffset(deltaX);
+
+      // Track height is 42px. Determine if user dragged up or down between tracks!
+      const currentTrackIndex = tracks.findIndex((t) => t.id === draggingClip.trackId);
+      const trackDelta = Math.round(deltaY / 42);
+      const newTrackIndex = currentTrackIndex + trackDelta;
+
+      if (newTrackIndex >= 0 && newTrackIndex < tracks.length) {
+        const sourceTrack = tracks[currentTrackIndex];
+        const destTrack = tracks[newTrackIndex];
+
+        // Keep video on video tracks (V1, V2) and audio on audio tracks (A1)
+        if (sourceTrack.type === destTrack.type) {
+          setTargetTrackId(destTrack.id);
+        }
+      }
     },
-    [draggingClip]
+    [draggingClip, tracks]
   );
 
+  // 2D Drag Drop Finalization (Update Time + Track Location in tandem with Linked Audio)
   const handleClipPointerUp = useCallback(
     (e: React.PointerEvent) => {
       if (draggingClip) {
@@ -174,26 +245,67 @@ export function Timeline() {
 
         const deltaSecs = dragOffset / zoomLevel;
         const newStart = Math.max(0, draggingClip.initialStart + deltaSecs);
+        const finalDestTrackId = targetTrackId || draggingClip.trackId;
 
-        setTracks((prev) =>
-          prev.map((t) => {
-            if (t.id === draggingClip.trackId) {
-              const newItems = [...t.items];
-              newItems[draggingClip.itemIdx] = {
-                ...newItems[draggingClip.itemIdx],
-                start: newStart,
-              };
-              return { ...t, items: newItems };
+        setTracks((prev) => {
+          // Find dragged item
+          let movingItem: DragItem | null = null;
+          const updatedTracks = prev.map((track) => {
+            if (track.id === draggingClip.trackId) {
+              const item = track.items[draggingClip.itemIdx];
+              if (item) {
+                movingItem = { ...item, start: newStart };
+              }
+              // If moving to another track, remove from current
+              if (finalDestTrackId !== draggingClip.trackId) {
+                return {
+                  ...track,
+                  items: track.items.filter((_, idx) => idx !== draggingClip.itemIdx),
+                };
+              } else {
+                const newItems = [...track.items];
+                newItems[draggingClip.itemIdx] = movingItem!;
+                return { ...track, items: newItems };
+              }
             }
-            return t;
-          })
-        );
+            return track;
+          });
+
+          // Insert into destination track if changed
+          let result = updatedTracks;
+          if (finalDestTrackId !== draggingClip.trackId && movingItem) {
+            result = result.map((track) => {
+              if (track.id === finalDestTrackId) {
+                return {
+                  ...track,
+                  items: [...track.items, movingItem!],
+                };
+              }
+              return track;
+            });
+          }
+
+          // SYNC LINKED AUDIO: Also shift linked audio clip by the exact same deltaSecs!
+          if (draggingClip.linkedClipId) {
+            result = result.map((track) => ({
+              ...track,
+              items: track.items.map((item) =>
+                item.id === draggingClip.linkedClipId
+                  ? { ...item, start: Math.max(0, (item.start || 0) + deltaSecs) }
+                  : item
+              ),
+            }));
+          }
+
+          return result;
+        });
 
         setDraggingClip(null);
         setDragOffset(0);
+        setTargetTrackId(null);
       }
     },
-    [draggingClip, dragOffset, zoomLevel, setTracks]
+    [draggingClip, dragOffset, zoomLevel, targetTrackId, setTracks]
   );
 
   // Ruler scrubbing handler
@@ -256,15 +368,18 @@ export function Timeline() {
             <div className="flex-1 relative overflow-hidden pointer-events-none">
               <TimeRuler zoomLevel={zoomLevel} width={Math.max(timelineWidth, 3000)} />
 
-              {/* Shaded In/Out Range Highlight */}
+              {/* Shaded In/Out Range Highlight on Ruler */}
               {inPoint !== null && outPoint !== null && (
                 <div
-                  className="absolute top-0 bottom-0 bg-accent/20 border-x border-accent/80 pointer-events-none"
+                  className="absolute top-0 bottom-0 bg-accent/25 border-x-2 border-accent pointer-events-none flex justify-between"
                   style={{
                     left: inPoint * zoomLevel,
                     width: Math.max(2, (outPoint - inPoint) * zoomLevel),
                   }}
-                />
+                >
+                  <span className="text-[8px] font-bold text-accent pl-0.5">&#123;</span>
+                  <span className="text-[8px] font-bold text-accent pr-0.5">&#125;</span>
+                </div>
               )}
             </div>
           </div>
@@ -276,48 +391,60 @@ export function Timeline() {
           <div
             className="flex-1 relative pb-8"
             onClick={(e) => {
-              // Only deselect if clicked directly on track background, not on clips
               if (e.target === e.currentTarget) {
                 setSelectedClipId(null);
               }
             }}
           >
-            {tracks.map((track) => (
-              <div
-                key={track.id}
-                onPointerUp={(e) => handlePointerUpBinDrop(e, track.id)}
-                className={`h-[42px] flex items-center relative transition-colors ${
-                  draggedItem ? "bg-[#252525] ring-1 ring-accent/40" : "bg-[var(--background)]"
-                } border-b border-[var(--panel-border)]`}
-              >
-                <TrackHeader name={track.name} />
+            {tracks.map((track) => {
+              const isDropTarget = targetTrackId === track.id && draggingClip?.trackId !== track.id;
 
-                <div className="flex-1 h-full relative">
-                  {track.items.map((item, idx) => (
-                    <TimelineClip
-                      key={`${item.id}-${idx}`}
-                      item={item}
-                      trackId={track.id}
-                      itemIndex={idx}
-                      zoomLevel={zoomLevel}
-                      isSelected={selectedClipId === item.id}
-                      activeTool={activeTool}
-                      isBeingDragged={
-                        draggingClip?.trackId === track.id && draggingClip?.itemIdx === idx
-                      }
-                      dragOffset={dragOffset}
-                      onPointerDown={(e) => handleClipPointerDown(e, track.id, idx, item)}
-                      onPointerMove={handleClipPointerMove}
-                      onPointerUp={handleClipPointerUp}
-                    />
-                  ))}
+              return (
+                <div
+                  key={track.id}
+                  onPointerUp={(e) => handlePointerUpBinDrop(e, track.id)}
+                  className={`h-[42px] flex items-center relative transition-colors ${
+                    isDropTarget
+                      ? "bg-accent/20 ring-1 ring-accent"
+                      : draggedItem
+                      ? "bg-[#252525] ring-1 ring-accent/40"
+                      : "bg-[var(--background)]"
+                  } border-b border-[var(--panel-border)]`}
+                >
+                  <TrackHeader name={track.name} />
 
-                  {draggedItem && (
-                    <div className="absolute inset-y-[4px] right-2 left-2 border border-dashed border-accent/60 pointer-events-none bg-accent/5 rounded" />
-                  )}
+                  <div className="flex-1 h-full relative">
+                    {track.items.map((item, idx) => {
+                      const isThisDragged =
+                        draggingClip?.trackId === track.id && draggingClip?.itemIdx === idx;
+                      const isLinkedToDragged =
+                        draggingClip?.linkedClipId === item.id;
+
+                      return (
+                        <TimelineClip
+                          key={`${item.id}-${idx}`}
+                          item={item}
+                          trackId={track.id}
+                          itemIndex={idx}
+                          zoomLevel={zoomLevel}
+                          isSelected={selectedClipId === item.id}
+                          activeTool={activeTool}
+                          isBeingDragged={isThisDragged || isLinkedToDragged}
+                          dragOffset={dragOffset}
+                          onPointerDown={(e) => handleClipPointerDown(e, track.id, idx, item)}
+                          onPointerMove={handleClipPointerMove}
+                          onPointerUp={handleClipPointerUp}
+                        />
+                      );
+                    })}
+
+                    {draggedItem && (
+                      <div className="absolute inset-y-[4px] right-2 left-2 border border-dashed border-accent/60 pointer-events-none bg-accent/5 rounded" />
+                    )}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       </div>

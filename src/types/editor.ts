@@ -3,12 +3,13 @@ export interface DragItem {
   type: "media" | "clip";
   name: string;
   color?: string;
-  start?: number; // timestamp in seconds
-  duration?: number; // duration in seconds
+  start?: number; // timestamp in sequence (seconds)
+  duration?: number; // duration on timeline (seconds)
+  trimIn?: number; // offset into source media file (seconds)
   src?: string; // local file path
   hasAudio?: boolean;
   waveform?: number[];
-  linkedClipId?: string;
+  linkedClipId?: string; // ID of paired video or audio clip
   width?: number;
   height?: number;
 }
