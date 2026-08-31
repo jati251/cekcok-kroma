@@ -11,7 +11,6 @@ function App() {
   const setIsPlaying = useEditorStore(state => state.setIsPlaying);
   const deleteSelectedClip = useEditorStore(state => state.deleteSelectedClip);
   const setZoomLevel = useEditorStore(state => state.setZoomLevel);
-  const isPlaying = useEditorStore(state => state.isPlaying);
 
   // Global Keyboard Shortcuts
   useEffect(() => {
@@ -31,6 +30,7 @@ function App() {
           break;
         case ' ':
           e.preventDefault(); // prevent scrolling
+          // Using store directly to avoid stale closures in event listener
           setIsPlaying(!useEditorStore.getState().isPlaying);
           break;
         case 'backspace':
@@ -51,55 +51,44 @@ function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [setActiveTool, setIsPlaying, deleteSelectedClip, setZoomLevel]);
 
-  // Playback Loop
-  useEffect(() => {
-    if (!isPlaying) return;
-
-    let lastTime = performance.now();
-    let animationFrameId: number;
-
-    const loop = (time: number) => {
-      if (!useEditorStore.getState().isPlaying) return; // double check
-
-      const delta = (time - lastTime) / 1000; // convert to seconds
-      lastTime = time;
-
-      const currentPlayhead = useEditorStore.getState().playheadPosition;
-      useEditorStore.getState().setPlayheadPosition(currentPlayhead + delta);
-
-      animationFrameId = requestAnimationFrame(loop);
-    };
-
-    animationFrameId = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(animationFrameId);
-  }, [isPlaying]); // Re-run effect when isPlaying changes
+  // NOTE: Playback Loop has been moved to ProgramMonitor.tsx
+  // This is because the best way to get zero lag is to let the <video> play natively
+  // and sync the playhead to its currentTime, rather than manually advancing the playhead via RequestAnimationFrame here.
 
   return (
-    <div className="flex flex-col h-screen overflow-hidden bg-background text-foreground">
+    <div className="flex flex-col h-screen overflow-hidden bg-background text-foreground text-[11px] font-sans selection:bg-accent/30">
       {/* Header */}
-      <header className="flex items-center justify-between px-4 py-2 border-b border-border bg-primary">
-        <div className="flex items-center gap-2">
-          <div className="w-6 h-6 bg-accent rounded-sm shadow-[0_0_10px_var(--color-accent)]" />
-          <h1 className="text-sm font-semibold tracking-wide">Cekcok Kroma</h1>
-        </div>
-        <div className="flex gap-4 text-xs text-zinc-400">
-          <button className="hover:text-foreground transition-colors">File</button>
-          <button className="hover:text-foreground transition-colors">Edit</button>
-          <button className="hover:text-foreground transition-colors">View</button>
-          <button className="hover:text-foreground transition-colors">Export</button>
+      <header className="flex items-center justify-between px-2 h-7 border-b border-[#141414] bg-[#2d2d2d] shrink-0">
+        <div className="flex items-center gap-3">
+          <div className="w-3 h-3 bg-[#c975ff] rounded-sm ml-1" /> {/* Adobe-like app icon color */}
+          <div className="flex gap-3 text-[#cccccc]">
+            <button className="hover:bg-[#444] px-1.5 py-0.5 rounded cursor-default">File</button>
+            <button className="hover:bg-[#444] px-1.5 py-0.5 rounded cursor-default">Edit</button>
+            <button className="hover:bg-[#444] px-1.5 py-0.5 rounded cursor-default">Clip</button>
+            <button className="hover:bg-[#444] px-1.5 py-0.5 rounded cursor-default">Sequence</button>
+            <button className="hover:bg-[#444] px-1.5 py-0.5 rounded cursor-default">Markers</button>
+            <button className="hover:bg-[#444] px-1.5 py-0.5 rounded cursor-default">Graphics</button>
+            <button className="hover:bg-[#444] px-1.5 py-0.5 rounded cursor-default">View</button>
+            <button className="hover:bg-[#444] px-1.5 py-0.5 rounded cursor-default">Window</button>
+            <button className="hover:bg-[#444] px-1.5 py-0.5 rounded cursor-default">Help</button>
+          </div>
         </div>
       </header>
 
       {/* Main Workspace */}
-      <div className="flex flex-1 overflow-hidden">
-        <Toolbar />
-        <MediaBin />
+      <div className="flex flex-1 overflow-hidden p-0.5 gap-0.5 bg-[#141414]">
+        <div className="flex flex-col w-[300px] gap-0.5">
+          <MediaBin />
+          <Inspector />
+        </div>
         <ProgramMonitor />
-        <Inspector />
       </div>
 
-      {/* Timeline */}
-      <Timeline />
+      {/* Timeline Area */}
+      <div className="h-[45%] flex gap-0.5 bg-[#141414] p-0.5 pt-0">
+        <Toolbar />
+        <Timeline />
+      </div>
     </div>
   );
 }

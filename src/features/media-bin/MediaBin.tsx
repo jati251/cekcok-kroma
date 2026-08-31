@@ -39,43 +39,39 @@ export function MediaBin() {
   };
 
   return (
-    <div className="w-1/4 border-r border-border bg-secondary flex flex-col h-full">
-      <div className="p-2 border-b border-border text-xs font-medium uppercase tracking-wider text-zinc-400 flex justify-between items-center">
-        <span>Project Media</span>
+    <div className="flex-1 flex flex-col bg-[var(--panel-bg)] border border-[var(--panel-border)]">
+      <div className="h-6 px-3 flex items-center justify-between bg-[#2d2d2d] border-b border-[#111]">
+        <span className="text-[11px] text-[#ccc]">Project Media</span>
         <button 
           onClick={handleImport}
-          className="text-[10px] bg-primary hover:bg-accent hover:text-white px-2 py-1 rounded transition-colors"
+          className="text-[10px] text-accent hover:text-white transition-colors"
         >
           Import
         </button>
       </div>
-      <div className="flex-1 p-4 flex flex-col gap-2 overflow-y-auto">
-        {mediaItems.map((item) => (
-          <motion.div
-            key={item.id}
-            drag
-            dragSnapToOrigin
-            onDragStart={() => setDraggedItem(item)}
-            onDragEnd={() => setDraggedItem(null)}
-            className="p-3 bg-primary border border-border rounded shadow-sm cursor-grab active:cursor-grabbing flex flex-col gap-1 hover:bg-primary/80 transition-colors z-10"
-            whileDrag={{ scale: 1.05, opacity: 0.8, zIndex: 50 }}
-          >
-            <div className="flex items-center gap-2">
-              <div className="w-3 h-3 rounded-full" style={{ backgroundColor: item.color }} />
-              <span className="text-sm text-zinc-300 truncate font-medium">{item.name}</span>
+      <div className="flex-1 p-2 overflow-y-auto">
+        <div className="grid grid-cols-2 gap-2">
+          {mediaItems.map((item) => (
+            <motion.div
+              key={item.id}
+              className="aspect-video bg-[#111] border border-[#333] flex items-center justify-center cursor-grab active:cursor-grabbing hover:border-accent group relative overflow-hidden"
+              onPointerDown={() => setDraggedItem(item)}
+            >
+              <div className="text-[10px] text-[#999] truncate px-2 text-center break-all w-full z-10 drop-shadow-md group-hover:text-white transition-colors">
+                {item.name}
+              </div>
+              <div className="absolute bottom-0 right-0 bg-black/80 px-1 text-[9px] text-[#777]">
+                {(item.duration || 0).toFixed(1)}s
+              </div>
+            </motion.div>
+          ))}
+          
+          {mediaItems.length === 0 && (
+            <div className="col-span-2 text-center text-[#555] mt-10">
+              No media.<br/>Click Import to add files.
             </div>
-            {item.duration && (
-              <span className="text-[10px] text-zinc-500 pl-5">
-                {(item.duration).toFixed(2)}s
-              </span>
-            )}
-          </motion.div>
-        ))}
-        {mediaItems.length === 0 && (
-          <div className="text-sm text-zinc-600 text-center mt-10 p-4 border border-dashed border-zinc-700 rounded bg-primary/30">
-            Click Import to add videos
-          </div>
-        )}
+          )}
+        </div>
       </div>
     </div>
   );
