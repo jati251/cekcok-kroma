@@ -48,7 +48,7 @@ export function Timeline() {
     return () => window.removeEventListener("resize", handleResize);
   }, []);
 
-  // Drop media from MediaBin at mouse X timestamp
+  // Drop media from MediaBin at mouse X timestamp + AUTOMATIC LINKED AUDIO TRACK SPAWN!
   const handlePointerUpBinDrop = (e: React.PointerEvent, trackId: string) => {
     if (draggedItem && activeTool === "selection") {
       let dropTime = 0;
@@ -59,21 +59,51 @@ export function Timeline() {
         dropTime = Math.max(0, x / zoomLevel);
       }
 
+      const duration = draggedItem.duration || 5;
+      const baseId = `${draggedItem.id}-${Date.now()}`;
+      const videoClipId = `${baseId}-v`;
+      const audioClipId = `${baseId}-a`;
+
+      const videoClip: DragItem = {
+        ...draggedItem,
+        id: videoClipId,
+        linkedClipId: audioClipId,
+        start: dropTime,
+        duration,
+        color: "#2d8ceb",
+      };
+
+      const audioClip: DragItem = {
+        ...draggedItem,
+        id: audioClipId,
+        linkedClipId: videoClipId,
+        name: `${draggedItem.name} [Audio]`,
+        start: dropTime,
+        duration,
+        color: "#10b981", // Emerald green for Premiere Pro audio
+        waveform: draggedItem.waveform || [],
+      };
+
       setTracks((prev) =>
         prev.map((track) => {
           if (track.id === trackId) {
-            const duration = draggedItem.duration || 5;
             return {
               ...track,
-              items: [
-                ...track.items,
-                { ...draggedItem, id: `${draggedItem.id}-${Date.now()}`, start: dropTime, duration },
-              ],
+              items: [...track.items, videoClip],
+            };
+          }
+          // Also automatically add linked audio to A1 if dropping on video track and item has audio
+          if (track.id === "a1" && trackId.startsWith("v") && draggedItem.hasAudio !== false) {
+            return {
+              ...track,
+              items: [...track.items, audioClip],
             };
           }
           return track;
         })
       );
+
+      setSelectedClipId(videoClipId);
       setDraggedItem(null);
     }
   };
@@ -225,6 +255,17 @@ export function Timeline() {
 
             <div className="flex-1 relative overflow-hidden pointer-events-none">
               <TimeRuler zoomLevel={zoomLevel} width={Math.max(timelineWidth, 3000)} />
+
+              {/* Shaded In/Out Range Highlight */}
+              {inPoint !== null && outPoint !== null && (
+                <div
+                  className="absolute top-0 bottom-0 bg-accent/20 border-x border-accent/80 pointer-events-none"
+                  style={{
+                    left: inPoint * zoomLevel,
+                    width: Math.max(2, (outPoint - inPoint) * zoomLevel),
+                  }}
+                />
+              )}
             </div>
           </div>
 
@@ -232,7 +273,15 @@ export function Timeline() {
           <Playhead zoomLevel={zoomLevel} timelineRef={timelineRef} />
 
           {/* Tracks Area */}
-          <div className="flex-1 relative pb-8" onClick={() => setSelectedClipId(null)}>
+          <div
+            className="flex-1 relative pb-8"
+            onClick={(e) => {
+              // Only deselect if clicked directly on track background, not on clips
+              if (e.target === e.currentTarget) {
+                setSelectedClipId(null);
+              }
+            }}
+          >
             {tracks.map((track) => (
               <div
                 key={track.id}

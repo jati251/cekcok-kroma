@@ -16,6 +16,7 @@ interface TimelineClipProps {
 
 export function TimelineClip({
   item,
+  trackId,
   zoomLevel,
   isSelected,
   activeTool,
@@ -25,17 +26,23 @@ export function TimelineClip({
   onPointerMove,
   onPointerUp,
 }: TimelineClipProps) {
-  const thumbUrl = item.src
-    ? `kromavideo://localhost/?path=${encodeURIComponent(item.src)}&t=${item.start || 0}`
-    : "";
+  const isAudio = trackId.startsWith("a") || item.color === "#10b981";
+
+  const thumbUrl =
+    !isAudio && item.src
+      ? `kromavideo://localhost/?path=${encodeURIComponent(item.src)}&t=${item.start || 0}`
+      : "";
 
   const cursorClass =
     activeTool === "razor"
       ? "cursor-crosshair bg-red-800/80"
       : "cursor-pointer hover:border-[#aaa]";
 
+  const clipBg = isAudio ? "#064e3b" : item.color || "var(--accent)";
+
   return (
     <div
+      onClick={(e) => e.stopPropagation()} // CRITICAL: Stop propagation so container onClick doesn't deselect!
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
@@ -46,7 +53,7 @@ export function TimelineClip({
       style={{
         left: (item.start || 0) * zoomLevel,
         width: (item.duration || 0) * zoomLevel,
-        backgroundColor: item.color || "var(--accent)",
+        backgroundColor: clipBg,
         backgroundImage: thumbUrl ? `url(${thumbUrl})` : "none",
         backgroundSize: "cover",
         backgroundPosition: "left center",
@@ -54,8 +61,37 @@ export function TimelineClip({
         transform: isBeingDragged ? `translateX(${dragOffset}px)` : "none",
       }}
     >
+      {/* Dim Overlay */}
       <div className="absolute inset-0 bg-black/40 pointer-events-none" />
-      <span className="truncate w-full drop-shadow-[0_1px_2px_rgba(0,0,0,1)] pointer-events-none text-[10px] relative z-10 font-bold">
+
+      {/* Audio Waveform Canvas for Audio Clips */}
+      {isAudio && (
+        <div className="absolute inset-0 pointer-events-none flex items-center px-1">
+          {/* Baseline */}
+          <div className="w-full h-[1px] bg-emerald-400/40 absolute left-0" />
+          {/* Waveform bars */}
+          <div className="w-full h-full flex items-center justify-between gap-[1px] py-1">
+            {(item.waveform && item.waveform.length > 0
+              ? item.waveform
+              : [0.3, 0.6, 0.8, 0.4, 0.7, 0.9, 0.5, 0.3, 0.6, 0.8, 0.4, 0.7]
+            ).map((amp, idx) => (
+              <div
+                key={idx}
+                className="w-1 bg-emerald-400/80 rounded-full"
+                style={{ height: `${Math.max(10, Math.min(100, amp * 100))}%` }}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Clip Name Label */}
+      <span className="truncate w-full drop-shadow-[0_1px_2px_rgba(0,0,0,1)] pointer-events-none text-[10px] relative z-10 font-bold flex items-center gap-1">
+        {isAudio && (
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M11 5L6 9H2v6h4l5 4V5z" /><path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+          </svg>
+        )}
         {item.name}
       </span>
     </div>

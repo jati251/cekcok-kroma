@@ -8,6 +8,10 @@ interface TransportBarProps {
   isLooping: boolean;
   onToggleLoop: () => void;
   onExportFrame: () => void;
+  volume: number;
+  onVolumeChange: (vol: number) => void;
+  isMuted: boolean;
+  onToggleMute: () => void;
 }
 
 export function TransportBar({
@@ -18,6 +22,10 @@ export function TransportBar({
   isLooping,
   onToggleLoop,
   onExportFrame,
+  volume,
+  onVolumeChange,
+  isMuted,
+  onToggleMute,
 }: TransportBarProps) {
   const inPoint = useEditorStore((state) => state.inPoint);
   const setInPoint = useEditorStore((state) => state.setInPoint);
@@ -29,26 +37,62 @@ export function TransportBar({
 
   return (
     <div className="h-9 shrink-0 bg-[#242424] border-t border-[#181818] px-3 flex items-center justify-between select-none">
-      {/* Left: Mark In/Out */}
-      <div className="flex items-center gap-1.5">
-        <button
-          onClick={() => setInPoint(playheadPosition)}
-          className={`w-6 h-6 rounded flex items-center justify-center text-[10px] font-mono cursor-pointer transition-colors ${
-            inPoint !== null ? "bg-[#333] text-accent font-bold" : "text-[#aaa] hover:bg-[#333]"
-          }`}
-          title="Mark In ({)"
-        >
-          &#123;
-        </button>
-        <button
-          onClick={() => setOutPoint(playheadPosition)}
-          className={`w-6 h-6 rounded flex items-center justify-center text-[10px] font-mono cursor-pointer transition-colors ${
-            outPoint !== null ? "bg-[#333] text-accent font-bold" : "text-[#aaa] hover:bg-[#333]"
-          }`}
-          title="Mark Out (})"
-        >
-          &#125;
-        </button>
+      {/* Left: Mark In/Out & Volume */}
+      <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => setInPoint(playheadPosition)}
+            className={`w-6 h-6 rounded flex items-center justify-center text-[10px] font-mono cursor-pointer transition-colors ${
+              inPoint !== null ? "bg-[#333] text-accent font-bold" : "text-[#aaa] hover:bg-[#333]"
+            }`}
+            title="Mark In ({)"
+          >
+            &#123;
+          </button>
+          <button
+            onClick={() => setOutPoint(playheadPosition)}
+            className={`w-6 h-6 rounded flex items-center justify-center text-[10px] font-mono cursor-pointer transition-colors ${
+              outPoint !== null ? "bg-[#333] text-accent font-bold" : "text-[#aaa] hover:bg-[#333]"
+            }`}
+            title="Mark Out (})"
+          >
+            &#125;
+          </button>
+        </div>
+
+        {/* Master Audio Volume Control */}
+        <div className="flex items-center gap-1.5 pl-2 border-l border-[#333]">
+          <button
+            onClick={onToggleMute}
+            className={`p-1 rounded cursor-pointer transition-colors ${
+              isMuted ? "text-red-400" : "text-[#888] hover:text-white"
+            }`}
+            title={isMuted ? "Unmute" : "Mute"}
+          >
+            {isMuted || volume === 0 ? (
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <line x1="1" y1="1" x2="23" y2="23" /><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6" />
+                <path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23" />
+                <line x1="12" y1="19" x2="12" y2="23" /><line x1="8" y1="23" x2="16" y2="23" />
+              </svg>
+            ) : (
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                <path d="M15.54 8.46a5 5 0 0 1 0 7.07" /><path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+              </svg>
+            )}
+          </button>
+          <input
+            type="range"
+            min="0"
+            max="1"
+            step="0.05"
+            value={isMuted ? 0 : volume}
+            onChange={(e) => onVolumeChange(Number(e.target.value))}
+            className="w-14 h-1 accent-accent cursor-pointer"
+            title={`Volume: ${(volume * 100).toFixed(0)}%`}
+          />
+        </div>
       </div>
 
       {/* Center: Playback Transport Buttons */}

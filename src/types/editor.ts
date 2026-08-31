@@ -6,11 +6,17 @@ export interface DragItem {
   start?: number; // timestamp in seconds
   duration?: number; // duration in seconds
   src?: string; // local file path
+  hasAudio?: boolean;
+  waveform?: number[];
+  linkedClipId?: string;
+  width?: number;
+  height?: number;
 }
 
 export interface Track {
   id: string;
   name: string;
+  type: "video" | "audio";
   items: DragItem[];
 }
 

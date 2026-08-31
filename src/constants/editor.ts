@@ -9,7 +9,7 @@ export const ZOOM_LIMITS = {
 } as const;
 
 export const DEFAULT_TRACKS: Track[] = [
-  { id: "v1", name: "V1", items: [] },
-  { id: "v2", name: "V2", items: [] },
-  { id: "a1", name: "A1", items: [] },
+  { id: "v1", name: "V1", type: "video", items: [] },
+  { id: "v2", name: "V2", type: "video", items: [] },
+  { id: "a1", name: "A1", type: "audio", items: [] },
 ];

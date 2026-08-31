@@ -25,6 +25,28 @@ export function ProgramMonitor() {
   const [isLooping, setIsLooping] = useState(false);
   const [snapshotFlash, setSnapshotFlash] = useState(false);
 
+  // Master Volume state
+  const [volume, setVolume] = useState<number>(1);
+  const [isMuted, setIsMuted] = useState<boolean>(false);
+
+  const handleVolumeChange = (newVol: number) => {
+    setVolume(newVol);
+    if (newVol > 0 && isMuted) {
+      setIsMuted(false);
+    }
+    if (videoRef.current) {
+      videoRef.current.volume = newVol;
+    }
+  };
+
+  const handleToggleMute = () => {
+    const nextMuted = !isMuted;
+    setIsMuted(nextMuted);
+    if (videoRef.current) {
+      videoRef.current.muted = nextMuted;
+    }
+  };
+
   const handleExportFrame = () => {
     if (!videoRef.current) return;
     try {
@@ -64,6 +86,10 @@ export function ProgramMonitor() {
           activeVideoSrc={activeVideoSrc}
           showSafeMargins={showSafeMargins}
           snapshotFlash={snapshotFlash}
+          zoomMode={zoomMode}
+          resolution={resolution}
+          volume={volume}
+          isMuted={isMuted}
           onEnded={() => setIsPlaying(false)}
         />
         <AudioVuMeter meterL={meterL} meterR={meterR} />
@@ -77,6 +103,10 @@ export function ProgramMonitor() {
         isLooping={isLooping}
         onToggleLoop={() => setIsLooping(!isLooping)}
         onExportFrame={handleExportFrame}
+        volume={volume}
+        onVolumeChange={handleVolumeChange}
+        isMuted={isMuted}
+        onToggleMute={handleToggleMute}
       />
     </div>
   );

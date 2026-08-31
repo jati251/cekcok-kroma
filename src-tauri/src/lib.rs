@@ -1,6 +1,9 @@
 mod engine;
 mod commands;
 
+use tauri::menu::{MenuBuilder, SubmenuBuilder};
+use tauri::Emitter;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     engine::init();
@@ -10,10 +13,58 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
+        .setup(|app| {
+            // Build Native OS Application Menu (macOS menu bar / Windows window menu)
+            let file_menu = SubmenuBuilder::new(app, "File")
+                .text("import_media", "Import Media...\tCmdOrCtrl+I")
+                .separator()
+                .text("export_frame", "Export Frame...\tCmdOrCtrl+Shift+E")
+                .separator()
+                .close_window()
+                .quit()
+                .build()?;
+
+            let edit_menu = SubmenuBuilder::new(app, "Edit")
+                .undo()
+                .redo()
+                .separator()
+                .cut()
+                .copy()
+                .paste()
+                .separator()
+                .text("delete_clip", "Delete Clip\tBackspace")
+                .build()?;
+
+            let clip_menu = SubmenuBuilder::new(app, "Clip")
+                .text("razor_cut", "Razor Cut at Playhead\tC")
+                .build()?;
+
+            let seq_menu = SubmenuBuilder::new(app, "Sequence")
+                .text("mark_in", "Mark In\t{")
+                .text("mark_out", "Mark Out\t}")
+                .separator()
+                .text("play_pause", "Play / Pause\tSpace")
+                .build()?;
+
+            let help_menu = SubmenuBuilder::new(app, "Help")
+                .text("about_app", "About Cekcok Kroma")
+                .build()?;
+
+            let menu = MenuBuilder::new(app)
+                .items(&[&file_menu, &edit_menu, &clip_menu, &seq_menu, &help_menu])
+                .build()?;
+
+            app.set_menu(menu)?;
+
+            Ok(())
+        })
+        .on_menu_event(|app, event| {
+            let action_id = event.id().as_ref();
+            // Emit menu event to frontend window
+            let _ = app.emit("native-menu-action", action_id);
+        })
         .register_uri_scheme_protocol("kromavideo", |_app, request| {
             let uri = request.uri().to_string();
-            // uri looks like kromavideo://localhost/?path=/Users/...&t=2.5
-            // Extract path and t manually
             let mut path = "";
             let mut t = "0";
             if let Some(query) = uri.split('?').nth(1) {
@@ -26,7 +77,6 @@ pub fn run() {
                 }
             }
             
-            // decode URL path
             let path = urlencoding::decode(path).unwrap_or(std::borrow::Cow::Borrowed("")).into_owned();
 
             if path.is_empty() {
@@ -45,7 +95,7 @@ pub fn run() {
                     "-threads", "1",
                     "-f", "image2",
                     "-vcodec", "mjpeg",
-                    "-" // output to stdout
+                    "-"
                 ])
                 .output()
                 .expect("Failed to execute ffmpeg");
@@ -58,7 +108,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::greet,
-            commands::get_video_metadata
+            commands::get_video_metadata,
+            commands::get_audio_waveform,
+            commands::export_frame
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
