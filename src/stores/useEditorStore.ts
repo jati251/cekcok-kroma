@@ -48,10 +48,11 @@ interface EditorStore {
   isPlaying: boolean;
   setIsPlaying: (playing: boolean) => void;
 
-  // Sequence Tracks & Locking
+  // Sequence Tracks & Locking & Muting
   tracks: Track[];
   setTracks: (updater: (prev: Track[]) => Track[]) => void;
   toggleTrackLock: (trackId: string) => void;
+  toggleTrackMute: (trackId: string) => void;
 
   // Media Bin Items
   mediaItems: DragItem[];
@@ -131,6 +132,14 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     set((state) => ({
       tracks: state.tracks.map((t) =>
         t.id === trackId ? { ...t, isLocked: !t.isLocked } : t
+      ),
+    }));
+  },
+
+  toggleTrackMute: (trackId: string) => {
+    set((state) => ({
+      tracks: state.tracks.map((t) =>
+        t.id === trackId ? { ...t, isMuted: !t.isMuted } : t
       ),
     }));
   },

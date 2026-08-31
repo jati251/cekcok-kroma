@@ -19,6 +19,7 @@ export interface Track {
   name: string;
   type: "video" | "audio";
   isLocked?: boolean;
+  isMuted?: boolean;
   items: DragItem[];
 }
 

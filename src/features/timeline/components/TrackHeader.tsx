@@ -1,15 +1,25 @@
 interface TrackHeaderProps {
   name: string;
   isLocked?: boolean;
+  isMuted?: boolean;
   onToggleLock: () => void;
+  onToggleMute?: () => void;
 }
 
-export function TrackHeader({ name, isLocked, onToggleLock }: TrackHeaderProps) {
+export function TrackHeader({
+  name,
+  isLocked,
+  isMuted,
+  onToggleLock,
+  onToggleMute,
+}: TrackHeaderProps) {
+  const isAudio = name.startsWith("A");
+
   return (
     <div className="w-16 h-full border-r border-[var(--panel-border)] bg-[var(--panel-bg)] flex items-center justify-between px-1.5 sticky left-0 z-30 shrink-0 select-none">
       <span className="text-[10px] text-[#888] font-semibold">{name}</span>
 
-      <div className="flex items-center gap-1 text-[8px] text-[#555]">
+      <div className="flex items-center gap-1 text-[8px]">
         {/* Track Lock Padlock Button */}
         <button
           onClick={onToggleLock}
@@ -31,10 +41,20 @@ export function TrackHeader({ name, isLocked, onToggleLock }: TrackHeaderProps) 
           )}
         </button>
 
-        <button className="hover:text-white cursor-pointer" title="Mute">
-          M
-        </button>
-        <button className="hover:text-white cursor-pointer" title="Solo">
+        {/* Mute Button (Audio only) */}
+        {isAudio && (
+          <button
+            onClick={onToggleMute}
+            className={`px-1 py-0.5 rounded font-bold cursor-pointer transition-colors ${
+              isMuted ? "bg-red-600 text-white" : "text-[#555] hover:text-white"
+            }`}
+            title={isMuted ? "Unmute Track" : "Mute Track"}
+          >
+            M
+          </button>
+        )}
+
+        <button className="text-[#555] hover:text-white cursor-pointer" title="Solo">
           S
         </button>
       </div>

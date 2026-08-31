@@ -20,6 +20,7 @@ export function Timeline() {
   const tracks = useEditorStore((state) => state.tracks);
   const setTracks = useEditorStore((state) => state.setTracks);
   const toggleTrackLock = useEditorStore((state) => state.toggleTrackLock);
+  const toggleTrackMute = useEditorStore((state) => state.toggleTrackMute);
   const linkedSelection = useEditorStore((state) => state.linkedSelection);
   const isSnapping = useEditorStore((state) => state.isSnapping);
   const inPoint = useEditorStore((state) => state.inPoint);
@@ -651,7 +652,9 @@ export function Timeline() {
                   <TrackHeader
                     name={track.name}
                     isLocked={track.isLocked}
+                    isMuted={track.isMuted}
                     onToggleLock={() => toggleTrackLock(track.id)}
+                    onToggleMute={() => toggleTrackMute(track.id)}
                   />
 
                   <div className="flex-1 h-full relative">
