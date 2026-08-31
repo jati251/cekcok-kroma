@@ -9,7 +9,7 @@ interface Track {
 }
 
 export function Timeline() {
-  const { draggedItem, setDraggedItem } = useDragStore();
+  const { draggedItem } = useDragStore();
   const [tracks, setTracks] = useState<Track[]>([
     { id: "v1", name: "V1", items: [] },
     { id: "a1", name: "A1", items: [] },
