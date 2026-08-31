@@ -6,7 +6,8 @@ interface ActiveAudioVoice {
   clipId: string;
   src: string;
   audio: HTMLAudioElement;
-  targetTime: number;
+  isReady: boolean;
+  targetStartOffset: number;
 }
 
 export class MultiTrackAudioMixer {
@@ -25,9 +26,9 @@ export class MultiTrackAudioMixer {
   }
 
   private updateVolumes() {
-    const vol = this.isMuted ? 0 : this.masterVolume;
+    const effectiveVol = this.isMuted ? 0 : this.masterVolume;
     this.voices.forEach((voice) => {
-      voice.audio.volume = vol;
+      voice.audio.volume = effectiveVol;
       voice.audio.muted = this.isMuted;
     });
   }
@@ -50,7 +51,7 @@ export class MultiTrackAudioMixer {
       );
 
       if (!activeClip || !activeClip.src) {
-        // No clip active on this track; pause and remove voice if present
+        // No active clip on this track: clean up voice
         const existing = this.voices.get(track.id);
         if (existing) {
           existing.audio.pause();
@@ -68,10 +69,11 @@ export class MultiTrackAudioMixer {
 
       let voice = this.voices.get(track.id);
 
-      // If voice doesn't exist or clip changed, create/re-target voice
+      // New voice or changed clip
       if (!voice || voice.clipId !== activeClip.id) {
         if (voice) {
           voice.audio.pause();
+          voice.audio.src = "";
         }
 
         const audio = new Audio();
@@ -79,44 +81,59 @@ export class MultiTrackAudioMixer {
         audio.preload = "auto";
         audio.volume = this.isMuted ? 0 : this.masterVolume;
         audio.muted = this.isMuted;
-        audio.currentTime = expectedMediaTime;
 
-        voice = {
+        const newVoice: ActiveAudioVoice = {
           trackId: track.id,
           clipId: activeClip.id,
           src: activeClip.src,
           audio,
-          targetTime: expectedMediaTime,
+          isReady: false,
+          targetStartOffset: expectedMediaTime,
         };
-        this.voices.set(track.id, voice);
 
-        if (isPlaying) {
-          voice.audio.play().catch(() => {});
+        const onReady = () => {
+          newVoice.isReady = true;
+          try {
+            audio.currentTime = expectedMediaTime;
+          } catch {}
+          if (isPlaying) {
+            audio.play().catch(() => {});
+          }
+        };
+
+        if (audio.readyState >= 1) {
+          onReady();
+        } else {
+          audio.addEventListener("loadedmetadata", onReady, { once: true });
         }
+
+        this.voices.set(track.id, newVoice);
       } else {
-        // Voice already exists for this clip
+        // Voice exists: manage playback state
         if (isPlaying) {
-          if (voice.audio.paused) {
+          if (voice.isReady && voice.audio.paused) {
             voice.audio.play().catch(() => {});
           }
-          // Only perform drift correction if audio drifted more than 150ms
-          const drift = Math.abs(voice.audio.currentTime - expectedMediaTime);
-          if (drift > 0.18) {
-            voice.audio.currentTime = expectedMediaTime;
+          // Only perform drift correction if significant drift (> 250ms) and audio is playing smoothly
+          if (voice.isReady && voice.audio.readyState >= 2) {
+            const drift = Math.abs(voice.audio.currentTime - expectedMediaTime);
+            if (drift > 0.25) {
+              voice.audio.currentTime = expectedMediaTime;
+            }
           }
         } else {
-          // Paused: pause audio and seek to exact position
+          // Paused: pause audio and seek to exact frame
           if (!voice.audio.paused) {
             voice.audio.pause();
           }
-          if (Math.abs(voice.audio.currentTime - expectedMediaTime) > 0.04) {
+          if (voice.isReady && Math.abs(voice.audio.currentTime - expectedMediaTime) > 0.04) {
             voice.audio.currentTime = expectedMediaTime;
           }
         }
       }
     }
 
-    // Clean up voices for tracks that are now muted or have no clip
+    // Clean up voices for tracks that are no longer active
     this.voices.forEach((voice, trackId) => {
       if (!activeTrackIds.has(trackId)) {
         voice.audio.pause();

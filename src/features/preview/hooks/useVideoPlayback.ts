@@ -36,6 +36,9 @@ export function useVideoPlayback() {
   const [srcA, setSrcA] = useState<string | null>(null);
   const [srcB, setSrcB] = useState<string | null>(null);
 
+  // Track which segment ID is currently pre-seeked on the standby deck
+  const preSeekedSegmentIdRef = useRef<string | null>(null);
+
   // Dedicated Multi-Track Audio Mixer (independent of video canvas)
   const audioMixerRef = useRef<MultiTrackAudioMixer>(new MultiTrackAudioMixer());
 
@@ -113,12 +116,11 @@ export function useVideoPlayback() {
 
   const currentSegment = useMemo(() => getSegmentAt(playheadPosition), [getSegmentAt, playheadPosition, schedule]);
 
-  // PRE-LOAD & PRE-SEEK STANDBY DECK WELL IN ADVANCE (Zero-Stutter Cut Engine)
+  // PRE-LOAD & PRE-SEEK STANDBY DECK ONCE PER SEGMENT CHANGE (Zero-Stutter Cut Engine)
   useEffect(() => {
     const standbyEl = activeSlotRef.current === "A" ? videoRefB.current : videoRefA.current;
 
     if (!currentSegment) {
-      // Look for first upcoming segment
       const nextUpcoming = getNextSegmentAfter(playheadPosition);
       if (nextUpcoming) {
         const converted = convertFileSrc(nextUpcoming.src);
@@ -147,20 +149,24 @@ export function useVideoPlayback() {
       }
     }
 
-    // PRE-SEEK the standby deck right now so it is decoded in GPU memory!
-    if (nextSeg && standbyEl) {
-      const handlePreSeek = () => {
-        if (Math.abs(standbyEl.currentTime - nextSeg.trimIn) > 0.05) {
-          standbyEl.currentTime = nextSeg.trimIn;
-        }
+    // PRE-SEEK Standby Deck ONCE (prevent continuous seek reset)
+    if (nextSeg && nextSeg.id !== preSeekedSegmentIdRef.current && standbyEl) {
+      preSeekedSegmentIdRef.current = nextSeg.id;
+      const targetTime = nextSeg.trimIn;
+
+      const doSeek = () => {
+        try {
+          standbyEl.currentTime = targetTime;
+        } catch {}
       };
+
       if (standbyEl.readyState >= 1) {
-        handlePreSeek();
+        doSeek();
       } else {
-        standbyEl.addEventListener("loadedmetadata", handlePreSeek, { once: true });
+        standbyEl.addEventListener("loadedmetadata", doSeek, { once: true });
       }
     }
-  }, [currentSegment, activeSlot, playheadPosition, getNextSegmentAfter]);
+  }, [currentSegment?.id, activeSlot, getNextSegmentAfter]);
 
   // Canvas videos are kept permanently muted because MultiTrackAudioMixer handles all sound!
   useEffect(() => {
@@ -190,7 +196,9 @@ export function useVideoPlayback() {
     );
 
     if (Math.abs(activeEl.currentTime - targetMediaTime) > 0.03) {
-      activeEl.currentTime = targetMediaTime;
+      try {
+        activeEl.currentTime = targetMediaTime;
+      } catch {}
     }
   }, [playheadPosition, isPlaying, currentSegment, tracks]);
 
@@ -228,7 +236,9 @@ export function useVideoPlayback() {
       );
 
       if (Math.abs(activeEl.currentTime - targetMediaTime) > 0.08) {
-        activeEl.currentTime = targetMediaTime;
+        try {
+          activeEl.currentTime = targetMediaTime;
+        } catch {}
       }
 
       if (activeEl.paused) {
@@ -237,12 +247,14 @@ export function useVideoPlayback() {
     }
   }, [isPlaying]);
 
-  // PREMIERE PRO MERCURY PLAYBACK ENGINE (60fps steady loop)
+  // PREMIERE PRO MERCURY PLAYBACK ENGINE:
+  // Zero-Stutter Pre-Rolled Transitions + Multi-Track Audio Sync
   useEffect(() => {
     if (!isPlaying) return;
 
     let animationFrameId: number;
     let lastPerfTime = performance.now();
+    let isStandbyPreRolling = false;
 
     const playbackLoop = (now: number) => {
       const dt = (now - lastPerfTime) / 1000;
@@ -262,9 +274,12 @@ export function useVideoPlayback() {
         setPlayheadPosition(loopStart);
         const seg = getSegmentAt(loopStart);
         if (activeEl && seg) {
-          activeEl.currentTime = seg.trimIn + (loopStart - seg.timelineStart);
+          try {
+            activeEl.currentTime = seg.trimIn + (loopStart - seg.timelineStart);
+          } catch {}
         }
         audioMixerRef.current.sync(loopStart, tracks, true);
+        isStandbyPreRolling = false;
         animationFrameId = requestAnimationFrame(playbackLoop);
         return;
       }
@@ -282,25 +297,50 @@ export function useVideoPlayback() {
           // DERIVE Master Sequence Time from hardware video clock
           const mediaElapsed = Math.max(0, activeEl.currentTime - activeSeg.trimIn);
           const hardwareSeqTime = activeSeg.timelineStart + mediaElapsed;
+          const timeToCut = activeSeg.timelineEnd - hardwareSeqTime;
 
-          // Seamless Clip Transition Check (Cut Boundary)
+          const nextSeg = getNextSegmentAfter(activeSeg.timelineEnd);
+          const isAdjacentCut = nextSeg && Math.abs(nextSeg.timelineStart - activeSeg.timelineEnd) <= 0.08;
+
+          // PRE-ROLL DECK B 100ms BEFORE CUT: Start decoding frames in background!
+          if (isAdjacentCut && standbyEl && timeToCut <= 0.12 && timeToCut > 0 && !isStandbyPreRolling) {
+            isStandbyPreRolling = true;
+            standbyEl.play().catch(() => {});
+          }
+
+          // AT CUT BOUNDARY (0ms instant switch)
           if (hardwareSeqTime >= activeSeg.timelineEnd - 0.02 || activeEl.ended) {
-            const nextSeg = getNextSegmentAfter(activeSeg.timelineEnd);
-
-            if (nextSeg && Math.abs(nextSeg.timelineStart - activeSeg.timelineEnd) <= 0.08 && standbyEl) {
-              // SEAMLESS PING-PONG CUT SWITCH (0ms latency, zero seek at cut point!)
-              activeEl.pause();
-              playPromiseRef.current = standbyEl.play().catch(() => {});
-
+            if (isAdjacentCut && standbyEl) {
+              // Switch active slot instantaneously
               const newSlot = currentSlot === "A" ? "B" : "A";
               activeSlotRef.current = newSlot;
               setActiveSlot(newSlot);
 
+              // Direct DOM opacity update to prevent 1-frame React render delay!
+              if (videoRefA.current && videoRefB.current) {
+                if (newSlot === "B") {
+                  videoRefB.current.style.opacity = "1";
+                  videoRefB.current.style.zIndex = "10";
+                  videoRefA.current.style.opacity = "0";
+                  videoRefA.current.style.zIndex = "0";
+                } else {
+                  videoRefA.current.style.opacity = "1";
+                  videoRefA.current.style.zIndex = "10";
+                  videoRefB.current.style.opacity = "0";
+                  videoRefB.current.style.zIndex = "0";
+                }
+              }
+
+              activeEl.pause();
+              isStandbyPreRolling = false;
+              preSeekedSegmentIdRef.current = null;
+
               setPlayheadPosition(nextSeg.timelineStart);
               audioMixerRef.current.sync(nextSeg.timelineStart, tracks, true);
             } else if (nextSeg) {
-              // Gap between clips: pause video, let timer advance across gap
+              // Gap between clips
               activeEl.pause();
+              isStandbyPreRolling = false;
               const nextTime = currentPlayhead + dt;
               setPlayheadPosition(nextTime);
               audioMixerRef.current.sync(nextTime, tracks, true);
@@ -312,7 +352,7 @@ export function useVideoPlayback() {
               return;
             }
           } else {
-            // Normal forward playback: playhead follows hardware video
+            // Normal forward playback
             setPlayheadPosition(hardwareSeqTime);
             audioMixerRef.current.sync(hardwareSeqTime, tracks, true);
           }
@@ -328,7 +368,9 @@ export function useVideoPlayback() {
 
         if (nextUpcoming && nextPlayhead >= nextUpcoming.timelineStart) {
           if (activeEl) {
-            activeEl.currentTime = nextUpcoming.trimIn;
+            try {
+              activeEl.currentTime = nextUpcoming.trimIn;
+            } catch {}
             playPromiseRef.current = activeEl.play().catch(() => {});
           }
           setPlayheadPosition(nextUpcoming.timelineStart);
@@ -343,7 +385,7 @@ export function useVideoPlayback() {
         }
       }
 
-      // 3. Audio VU Meter (Calculated from active audio mixer voices)
+      // 3. Audio VU Meter
       const activeVoiceCount = audioMixerRef.current.getActiveVoiceCount();
       if (!isMasterMuted && activeVoiceCount > 0) {
         const base = -16 + Math.min(10, activeVoiceCount * 3) + Math.sin(now / 70) * 8;
