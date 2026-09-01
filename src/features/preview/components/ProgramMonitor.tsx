@@ -2,7 +2,7 @@ import { useState } from "react";
 import { formatTimecode } from "../../../utils/timecode";
 import { useEditorStore } from "../../../stores/useEditorStore";
 import { ZoomMode, PlaybackResolution } from "../types";
-import { useVideoPlayback } from "../hooks/useVideoPlayback";
+import { useWebCodecs } from "../hooks/useWebCodecs";
 import { MonitorHeader } from "./MonitorHeader";
 import { VideoCanvas } from "./VideoCanvas";
 import { AudioVuMeter } from "./AudioVuMeter";
@@ -19,7 +19,7 @@ export function ProgramMonitor() {
     isPlaying,
     setIsPlaying,
     resumeAudio,
-  } = useVideoPlayback();
+  } = useWebCodecs();
 
   const masterVolume = useEditorStore((state) => state.masterVolume);
   const setMasterVolume = useEditorStore((state) => state.setMasterVolume);

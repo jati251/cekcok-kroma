@@ -1,5 +1,5 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { PlaybackSegment } from "../hooks/useVideoPlayback";
+import { PlaybackSegment } from "../hooks/useWebCodecs";
 
 interface ActiveAudioVoice {
   id: string; // segment id
@@ -17,12 +17,15 @@ export class MultiTrackAudioMixer {
   private masterVolume: number = 1;
   private isMuted: boolean = false;
   private activeSegments: Set<string> = new Set();
-  
-  // Track context state to handle resume
+
   public ensureContext() {
     if (!this.audioCtx) {
       try {
-        this.audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+        const AudioContextClass =
+          window.AudioContext ||
+          (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+        if (!AudioContextClass) return;
+        this.audioCtx = new AudioContextClass();
         this.masterGain = this.audioCtx.createGain();
         this.masterGain.connect(this.audioCtx.destination);
         this.updateVolumes();
@@ -46,11 +49,16 @@ export class MultiTrackAudioMixer {
   }
 
   private updateVolumes() {
+    const effectiveVolume = this.isMuted ? 0 : this.masterVolume;
+
     if (this.masterGain && this.audioCtx) {
-      this.masterGain.gain.setValueAtTime(
-        this.isMuted ? 0 : this.masterVolume,
-        this.audioCtx.currentTime
-      );
+      this.masterGain.gain.setValueAtTime(effectiveVolume, this.audioCtx.currentTime);
+    }
+
+    // Direct audio element fallback volume
+    for (const voice of this.voices.values()) {
+      voice.audio.volume = effectiveVolume;
+      voice.audio.muted = this.isMuted;
     }
   }
 
@@ -74,11 +82,12 @@ export class MultiTrackAudioMixer {
           const audio = new Audio();
           audio.src = convertFileSrc(seg.src);
           audio.preload = "auto";
-          audio.crossOrigin = "anonymous";
-          
+          audio.volume = this.isMuted ? 0 : this.masterVolume;
+          audio.muted = this.isMuted;
+
           let sourceNode: MediaElementAudioSourceNode | null = null;
           let gainNode: GainNode | null = null;
-          
+
           if (this.audioCtx && this.masterGain) {
             try {
               sourceNode = this.audioCtx.createMediaElementSource(audio);
@@ -86,7 +95,7 @@ export class MultiTrackAudioMixer {
               sourceNode.connect(gainNode);
               gainNode.connect(this.masterGain);
             } catch (e) {
-              console.warn("WebAudio node connection failed:", e);
+              console.warn("WebAudio node connection fallback:", e);
             }
           }
 
@@ -106,7 +115,11 @@ export class MultiTrackAudioMixer {
               voice.audio.currentTime = expectedMediaTime;
             } catch {}
             if (isPlaying) {
-              voice.audio.play().catch(() => {});
+              if (voice.gainNode && this.audioCtx) {
+                voice.gainNode.gain.setValueAtTime(0.001, this.audioCtx.currentTime);
+                voice.gainNode.gain.linearRampToValueAtTime(1.0, this.audioCtx.currentTime + 0.008);
+              }
+              voice.audio.play().catch((err) => console.warn("Audio play blocked:", err));
             }
           };
 
@@ -118,7 +131,7 @@ export class MultiTrackAudioMixer {
 
           this.voices.set(seg.id, voice);
         } else {
-          // Voice exists in pool
+          // Voice exists
           if (isPlaying) {
             if (forceSeek && voice.isReady) {
               try {
@@ -131,7 +144,18 @@ export class MultiTrackAudioMixer {
                   voice.audio.currentTime = expectedMediaTime;
                 }
               } catch {}
+              if (voice.gainNode && this.audioCtx) {
+                voice.gainNode.gain.setValueAtTime(0.001, this.audioCtx.currentTime);
+                voice.gainNode.gain.linearRampToValueAtTime(1.0, this.audioCtx.currentTime + 0.008);
+              }
               voice.audio.play().catch(() => {});
+            } else if (voice.isReady && !voice.audio.paused) {
+              // Drift correction during playback
+              if (Math.abs(voice.audio.currentTime - expectedMediaTime) > 0.15) {
+                try {
+                  voice.audio.currentTime = expectedMediaTime;
+                } catch {}
+              }
             }
           } else {
             // Paused state
@@ -148,7 +172,7 @@ export class MultiTrackAudioMixer {
       }
     }
 
-    // Handle inactive segments: Pause them, but retain them in pool for fast rewind/looping
+    // Pause inactive segments
     for (const [id, voice] of this.voices.entries()) {
       if (!this.activeSegments.has(id)) {
         if (!voice.audio.paused) {

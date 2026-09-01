@@ -53,6 +53,8 @@ export function VideoCanvas({
           {/* Main Compositor Canvas */}
           <canvas
             ref={canvasRef}
+            width={1920}
+            height={1080}
             className="absolute inset-0 w-full h-full object-contain"
             style={{ filter: getResolutionFilter() }}
           />
